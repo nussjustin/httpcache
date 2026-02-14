@@ -1,0 +1,10 @@
+*.dll
+*.dylib
+*.exe
+*.exe~
+*.out
+*.so
+*.test
+.idea
+go.work
+vendor/
