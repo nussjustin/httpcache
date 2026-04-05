@@ -1528,6 +1528,24 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: `multiple expires`,
+			in: http.Response{
+				Header: http.Header{
+					"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					"Expires": []string{
+						"Mon, 02 Jan 2006 15:04:05 GMT",
+						"Mon, 03 Jan 2006 15:04:05 GMT",
+					},
+				},
+				StatusCode: http.StatusOK,
+			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+			},
+		},
 	}
 
 	for _, tt := range tests {

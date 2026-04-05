@@ -685,6 +685,8 @@ type ResponseMetadata struct {
 }
 
 // ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
+//
+// If the response has multiple Expires header values, the first one is used.
 func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error) {
 	dir, err := ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
 	if err != nil {
@@ -708,8 +710,13 @@ func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error)
 	}
 
 	if ss := resp.Header["Expires"]; len(ss) != 0 {
-		if d.Expires, err = http.ParseTime(strings.Join(ss, ", ")); err != nil {
-			// TODO: Test
+		// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+		//
+		// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+		// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+		// should be considered stale.
+
+		if d.Expires, err = http.ParseTime(ss[0]); err != nil {
 			return ResponseMetadata{}, err
 		}
 	}
