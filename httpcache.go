@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/http"
 	"net/textproto"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +21,7 @@ type Config struct {
 	// criteria specified in RFC 9111.
 	//
 	// If nil, only the criteria from RFC 9111 is applied to determine cacheability.
-	CacheableByExtension func(Request, Response) bool
+	CacheableByExtension func(RequestMetadata, ResponseMetadata) bool
 
 	// CanUnderstandResponseCode is used to check if a response with status code 206 or 304, or with must-understand cache
 	// directive should be cached.
@@ -87,7 +86,7 @@ var HeuristicallyCacheableStatusCodes = []int{
 }
 
 // CanStore checks if a response can be cached and for how long.
-func (c Config) CanStore(req Request, resp Response) bool {
+func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:
@@ -102,47 +101,43 @@ func (c Config) CanStore(req Request, resp Response) bool {
 		return false
 	}
 
-	respDirectives, _ := resp.Directives()
-
 	// - if the response status code is 206 or 304, or the must-understand cache directive (see Section 5.2.2.3) is
 	//   present: the cache understands the response status code
-	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || respDirectives.MustUnderstand {
+	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || resp.Directives.MustUnderstand {
 		if !c.canUnderstandResponseCode(resp.StatusCode) {
 			return false
 		}
 	}
 
 	// - the no-store cache directive is not present in the response (see Section 5.2.2.5);
-	if respDirectives.NoStore {
+	if resp.Directives.NoStore {
 		return false
 	}
 
 	// - if the cache is shared: the private response directive is either not present or allows a shared cache to store
 	//   a modified response; see Section 5.2.2.7);
-	if !c.Private && respDirectives.Private && (!c.RespectPrivateHeaders || len(respDirectives.PrivateHeaders) == 0) {
+	if !c.Private && resp.Directives.Private && (!c.RespectPrivateHeaders || len(resp.Directives.PrivateHeaders) == 0) {
 		return false
 	}
 
 	// - if the cache is shared: the Authorization header field is not present in the request (see Section 11.6.2 of
 	//   [HTTP]) or a response directive is present that explicitly allows shared caching (see Section 3.5); and
-	if !c.Private && req.Authorized() && !respDirectives.MustRevalidate && !respDirectives.Public && respDirectives.SMaxAge <= 0 {
+	if !c.Private && req.Authorized && !resp.Directives.MustRevalidate && !resp.Directives.Public && !resp.Directives.SMaxAge.Valid {
 		return false
 	}
-
-	respExpires, _ := resp.Expires()
 
 	// - the response contains at least one of the following
 	switch {
 	// a public response directive (see Section 5.2.2.9);
-	case respDirectives.Public:
+	case resp.Directives.Public:
 	// a private response directive, if the cache is not shared (see Section 5.2.2.7);
-	case c.Private && respDirectives.Private:
+	case c.Private && resp.Directives.Private:
 	// an Expires header field (see Section 5.3);
-	case !respExpires.IsZero():
+	case !resp.Expires.IsZero():
 	// a max-age response directive (see Section 5.2.2.1);
-	case respDirectives.MaxAge > 0:
+	case resp.Directives.MaxAge.Valid:
 	// if the cache is shared: an s-maxage response directive (see Section 5.2.2.10);
-	case !c.Private && respDirectives.SMaxAge > 0:
+	case !c.Private && resp.Directives.SMaxAge.Valid:
 	// a cache extension that allows it to be cached (see Section 5.2.3); or
 	case c.cacheableByExtension(req, resp):
 	// a status code that is defined as heuristically cacheable (see Section 4.2.2).
@@ -152,10 +147,8 @@ func (c Config) CanStore(req Request, resp Response) bool {
 	}
 
 	if !c.IgnoreRequestDirectiveNoStore {
-		reqDirectives, _ := req.Directives()
-
 		// Note: This is not actually part of "3. Storing Responses in Caches".
-		if reqDirectives.NoStore {
+		if req.Directives.NoStore {
 			return false
 		}
 	}
@@ -163,7 +156,7 @@ func (c Config) CanStore(req Request, resp Response) bool {
 	return true
 }
 
-func (c Config) cacheableByExtension(req Request, resp Response) bool {
+func (c Config) cacheableByExtension(req RequestMetadata, resp ResponseMetadata) bool {
 	if c.CacheableByExtension == nil {
 		return false
 	}
@@ -238,72 +231,13 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 	}
 }
 
-// Request contains HTTP request information related to caching. It can be used with [Config] to check if
-// a request is cacheable or not.
-type Request struct {
-	// Method contains the HTTP method of the request.
-	Method string
-
-	// URL is the requested URL.
-	URL *url.URL
-
-	// Header contains the request headers.
-	Header http.Header
-}
-
-// Authorized returns true if the request contains the Authorization header.
-func (r Request) Authorized() bool {
-	return len(r.Header["Authorization"]) != 0
-}
-
-// Directives returns the parsed Cache-Control header for this request.
-func (r Request) Directives() (RequestDirectives, error) {
-	return ParseRequestDirectives(strings.Join(r.Header["Cache-Control"], ", "))
-}
-
-// Response contains HTTP response information related to caching. It can be used with [Config] to check if
-// a response is cacheable or not.
-type Response struct {
-	// StatusCode is the final HTTP response code used for the response.
-	StatusCode int
-
-	// Header contains the response headers.
-	Header http.Header
-
-	// Trailer contains the response trailers.
-	Trailer http.Header
-}
-
-// Age returns the response age in seconds.
-func (r Response) Age() (time.Duration, error) {
-	ss := r.Header["Age"]
-	if len(ss) == 0 {
-		return 0, nil
-	}
-	return ParseAge(strings.Join(ss, ", "))
-}
-
-// Directives returns the parsed Cache-Control header for this response.
-func (r Response) Directives() (ResponseDirectives, error) {
-	return ParseResponseDirectives(strings.Join(r.Header["Cache-Control"], ", "))
-}
-
-// Expires returns the time at which the response expires, if any.
-func (r Response) Expires() (time.Time, error) {
-	ss := r.Header["Expires"]
-	if len(ss) == 0 {
-		return time.Time{}, nil
-	}
-	return ParseExpires(strings.Join(ss, ", "))
-}
-
-// Vary returns the parsed header names from the Vary header.
+// NormalizeVaryHeader returns the parsed header names from the Vary header.
 //
 // Duplicates are removed and the result is sorted.
-func (r Response) Vary() []string {
+func NormalizeVaryHeader(values []string) []string {
 	var headers []string
 
-	for _, vary := range r.Header["Vary"] {
+	for _, vary := range values {
 		for header := range strings.SplitSeq(vary, ",") {
 			header = strings.TrimSpace(header)
 			header = textproto.CanonicalMIMEHeaderKey(header)
@@ -385,11 +319,6 @@ func parseDeltaSeconds(s string) (uint64, error) {
 	return d, nil
 }
 
-// ParseExpires parses a time and date from the HTTP Expires header.
-func ParseExpires(s string) (time.Time, error) {
-	return time.Parse("Mon, 02 Jan 2006 15:04:05 GMT", s)
-}
-
 // ExtensionDirective represents a non-standard Cache-Control directive.
 type ExtensionDirective struct {
 	// Name of the directive. May be empty if HasValue is true.
@@ -410,16 +339,25 @@ func (e ExtensionDirective) String() string {
 	return e.Name
 }
 
+// Opt represents a potentially unset value.
+type Opt[T any] struct {
+	// Value is the value if set or the zero value of T otherwise.
+	Value T
+
+	// Valid is true if Value was set.
+	Valid bool
+}
+
 // RequestDirectives contains parsed cache directives from a Cache-Control header for a request.
 type RequestDirectives struct {
 	// https://www.rfc-editor.org/rfc/rfc9111#name-max-age
-	MaxAge time.Duration
+	MaxAge Opt[time.Duration]
 
 	// https://www.rfc-editor.org/rfc/rfc9111#name-max-stale
-	MaxStale time.Duration
+	MaxStale Opt[time.Duration]
 
 	// https://www.rfc-editor.org/rfc/rfc9111#name-min-fresh
-	MinFresh time.Duration
+	MinFresh Opt[time.Duration]
 
 	// https://www.rfc-editor.org/rfc/rfc9111#name-no-cache
 	NoCache bool
@@ -459,21 +397,21 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
-			c.MaxAge = dur
+			c.MaxAge.Value, c.MaxAge.Valid = dur, true
 		case "max-stale":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("invalid value for max-stale: %w", err))
 				break
 			}
-			c.MaxStale = dur
+			c.MaxStale.Value, c.MaxStale.Valid = dur, true
 		case "min-fresh":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("invalid value for min-fresh: %w", err))
 				break
 			}
-			c.MinFresh = dur
+			c.MinFresh.Value, c.MinFresh.Valid = dur, true
 		case "no-cache":
 			c.NoCache = true
 		case "no-store":
@@ -499,14 +437,14 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 // String implements the [fmt.Stringer] interface.
 func (d RequestDirectives) String() string {
 	ss := make([]string, 0, 16)
-	if d.MaxAge > 0 {
-		ss = append(ss, "max-age="+strconv.Itoa(int(d.MaxAge/time.Second)))
+	if d.MaxAge.Valid {
+		ss = append(ss, "max-age="+strconv.Itoa(int(d.MaxAge.Value/time.Second)))
 	}
-	if d.MaxStale > 0 {
-		ss = append(ss, "max-stale="+strconv.Itoa(int(d.MaxStale/time.Second)))
+	if d.MaxStale.Valid {
+		ss = append(ss, "max-stale="+strconv.Itoa(int(d.MaxStale.Value/time.Second)))
 	}
-	if d.MinFresh > 0 {
-		ss = append(ss, "min-fresh="+strconv.Itoa(int(d.MinFresh/time.Second)))
+	if d.MinFresh.Valid {
+		ss = append(ss, "min-fresh="+strconv.Itoa(int(d.MinFresh.Value/time.Second)))
 	}
 	if d.NoCache {
 		ss = append(ss, "no-cache")
@@ -526,10 +464,38 @@ func (d RequestDirectives) String() string {
 	return strings.Join(ss, ", ")
 }
 
+// RequestMetadata contains HTTP request information related to caching. It can be used with [Config] to check if
+// a request is cacheable or not.
+type RequestMetadata struct {
+	// Authorized is true if the Authorization header was set.
+	Authorized bool
+
+	// Method contains the HTTP method of the request.
+	Method string
+
+	// Directives contains the parsed Cache-Control directives.
+	Directives RequestDirectives
+}
+
+// RequestMetadataFromRequest builds a RequestMetadata object from an actual HTTP request.
+func RequestMetadataFromRequest(req *http.Request) (RequestMetadata, error) {
+	dir, err := ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
+	if err != nil {
+		// TODO: Test
+		return RequestMetadata{}, err
+	}
+
+	return RequestMetadata{
+		Authorized: len(req.Header["Authorization"]) != 0,
+		Method:     req.Method,
+		Directives: dir,
+	}, nil
+}
+
 // ResponseDirectives contains parsed cache directives from a Cache-Control header for a response.
 type ResponseDirectives struct {
 	// https://www.rfc-editor.org/rfc/rfc9111#name-max-age-2
-	MaxAge time.Duration
+	MaxAge Opt[time.Duration]
 
 	// https://www.rfc-editor.org/rfc/rfc9111#name-must-revalidate
 	MustRevalidate bool
@@ -570,7 +536,7 @@ type ResponseDirectives struct {
 	Public bool
 
 	// https://www.rfc-editor.org/rfc/rfc9111#name-s-maxage
-	SMaxAge time.Duration
+	SMaxAge Opt[time.Duration]
 
 	// Extensions contains all non-standard directives in the order encountered.
 	//
@@ -598,7 +564,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
-			c.MaxAge = dur
+			c.MaxAge.Value, c.MaxAge.Valid = dur, true
 		case "must-revalidate":
 			c.MustRevalidate = true
 		case "must-understand":
@@ -633,7 +599,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for s-maxage: %w", err))
 				break
 			}
-			c.SMaxAge = dur
+			c.SMaxAge.Value, c.SMaxAge.Valid = dur, true
 		default:
 			c.Extensions = append(c.Extensions, ExtensionDirective(d))
 		}
@@ -651,8 +617,8 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 // String implements the [fmt.Stringer] interface.
 func (d ResponseDirectives) String() string {
 	ss := make([]string, 0, 16)
-	if d.MaxAge > 0 {
-		ss = append(ss, "max-age="+strconv.Itoa(int(d.MaxAge/time.Second)))
+	if d.MaxAge.Valid {
+		ss = append(ss, "max-age="+strconv.Itoa(int(d.MaxAge.Value/time.Second)))
 	}
 	if d.MustRevalidate {
 		ss = append(ss, "must-revalidate")
@@ -688,11 +654,95 @@ func (d ResponseDirectives) String() string {
 	if d.Public {
 		ss = append(ss, "public")
 	}
-	if d.SMaxAge > 0 {
-		ss = append(ss, "s-maxage="+strconv.Itoa(int(d.SMaxAge/time.Second)))
+	if d.SMaxAge.Valid {
+		ss = append(ss, "s-maxage="+strconv.Itoa(int(d.SMaxAge.Value/time.Second)))
 	}
 	for _, ext := range d.Extensions {
 		ss = append(ss, ext.String())
 	}
 	return strings.Join(ss, ", ")
+}
+
+// ResponseMetadata contains HTTP response information related to caching. It can be used with [Config] to check if
+// a response is cacheable or not.
+type ResponseMetadata struct {
+	// Date is the parsed time from the Date response header.
+	Date time.Time
+
+	// Directives contains the parsed Cache-Control directives.
+	Directives ResponseDirectives
+
+	// Expires contains the parsed Expires header, if given.
+	Expires time.Time
+
+	// StatusCode is the final HTTP response code used for the response.
+	StatusCode int
+
+	// Vary contains a normalized list of headers to vary the response by.
+	//
+	// See [NormalizeVaryHeader] for more information.
+	Vary []string
+}
+
+// ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
+func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error) {
+	dir, err := ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
+	if err != nil {
+		// TODO: Test
+		return ResponseMetadata{}, err
+	}
+
+	d := ResponseMetadata{
+		StatusCode: resp.StatusCode,
+		Directives: dir,
+		Vary:       NormalizeVaryHeader(resp.Header["Vary"]),
+	}
+
+	if ss := resp.Header["Date"]; len(ss) != 0 {
+		if d.Date, err = http.ParseTime(strings.Join(ss, ", ")); err != nil {
+			// TODO: Test
+			return ResponseMetadata{}, err
+		}
+	} else {
+		return ResponseMetadata{}, errors.New("missing Date header")
+	}
+
+	if ss := resp.Header["Expires"]; len(ss) != 0 {
+		if d.Expires, err = http.ParseTime(strings.Join(ss, ", ")); err != nil {
+			// TODO: Test
+			return ResponseMetadata{}, err
+		}
+	}
+
+	return d, nil
+}
+
+// FreshnessLifetime returns the time the response is considered to be fresh, as defined in RFC 9111, Section 4.2.
+func (r ResponseMetadata) FreshnessLifetime(shared bool) (time.Duration, bool) {
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+	//
+	// A cache can calculate the freshness lifetime (denoted as freshness_lifetime) of a response by evaluating the
+	// following rules and using the first match:
+
+	// If the cache is shared and the s-maxage response directive (Section 5.2.2.10) is present, use its value, or
+	if sMaxAge := r.Directives.SMaxAge; sMaxAge.Valid && shared {
+		return sMaxAge.Value, true
+	}
+
+	// If the max-age response directive (Section 5.2.2.1) is present, use its value, or
+	if maxAge := r.Directives.MaxAge; maxAge.Valid {
+		return maxAge.Value, true
+	}
+
+	// If the Expires response header field (Section 5.3) is present, use its value minus the value of the Date
+	// response header field (using the time the message was received if it is not present, as per Section 6.6.1
+	// of [HTTP]), or
+	if !r.Expires.IsZero() {
+		return r.Expires.Sub(r.Date), true
+	}
+
+	// Otherwise, no explicit expiration time is present in the response. A heuristic freshness lifetime might be
+	// applicable; see Section 4.2.2.
+
+	return 0, false // We do not support heuristic freshness lifetime
 }

@@ -12,146 +12,36 @@ import (
 	"github.com/nussjustin/httpcache"
 )
 
-func TestParseAge(t *testing.T) {
-	tests := []struct {
-		name    string
-		in      string
-		want    time.Duration
-		wantErr bool
-	}{
-		{
-			name: `basic`,
-			in:   `32`,
-			want: 32 * time.Second,
-		},
-		{
-			name: `zero`,
-			in:   `0`,
-		},
-		{
-			name:    `negative`,
-			in:      `-5`,
-			wantErr: true,
-		},
-		{
-			name:    `explicit plus`,
-			in:      `+5`,
-			wantErr: true,
-		},
-		{
-			name:    `float`,
-			in:      `1.5`,
-			wantErr: true,
-		},
-		{
-			name:    `empty`,
-			in:      ``,
-			wantErr: true,
-		},
-		{
-			name: `overflow time.Duration`,
-			in:   `9223372036854775806`,
-			want: time.Duration(math.MaxInt64),
-		},
-		{
-			name: `overflow int64`,
-			in:   `9223372037`,
-			want: time.Duration(math.MaxInt64),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ParseAge(tt.in)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseAge() error = %v, want %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("ParseAge() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseExpires(t *testing.T) {
-	tests := []struct {
-		name    string
-		in      string
-		want    time.Time
-		wantErr bool
-	}{
-		{
-			name: `basic`,
-			in:   `Wed, 21 Oct 2015 07:28:00 GMT`,
-			want: time.Date(2015, time.October, 21, 07, 28, 0, 0, time.UTC),
-		},
-		{
-			name:    `non-GMT timezone`,
-			in:      `Wed, 21 Oct 2015 07:28:00 CEST`,
-			wantErr: true,
-		},
-		{
-			name:    `empty`,
-			in:      ``,
-			wantErr: true,
-		},
-		{
-			name:    `missing time zone`,
-			in:      `Wed, 21 Oct 2015 07:28:00`,
-			wantErr: true,
-		},
-		{
-			name:    `missing week day`,
-			in:      `21 Oct 2015 07:28:00 GMT`,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ParseExpires(tt.in)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseExpires() error = %v, want %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ParseExpires() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestConfig_CanStore(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      httpcache.Config
-		req         httpcache.Request
-		resp        httpcache.Response
+		req         httpcache.RequestMetadata
+		resp        httpcache.ResponseMetadata
 		wantPublic  bool
 		wantPrivate bool
 	}{
 		{
 			name:        `simple GET`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 		{
 			name:        `simple HEAD`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "HEAD"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "HEAD"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 		{
 			name:        `simple QUERY`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "QUERY"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "QUERY"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -159,8 +49,8 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:        `invalid method`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "POST"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "POST"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -171,8 +61,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return method == "POST"
 				},
 			},
-			req:         httpcache.Request{Method: "POST"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "POST"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -183,8 +73,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return method == "PUT"
 				},
 			},
-			req:         httpcache.Request{Method: "POST"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "POST"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -192,8 +82,8 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:        `invalid status code`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusContinue},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusContinue},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -201,8 +91,8 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:        `status code 206`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusPartialContent},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -213,8 +103,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code == http.StatusPartialContent
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusPartialContent},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -225,8 +115,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code != http.StatusPartialContent
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusPartialContent},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -234,8 +124,8 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:        `status code 304`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusNotModified},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -246,9 +136,11 @@ func TestConfig_CanStore(t *testing.T) {
 					return code == http.StatusNotModified
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header:     http.Header{"Cache-Control": {"public"}},
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Public: true,
+				},
 				StatusCode: http.StatusNotModified,
 			},
 			wantPublic:  true,
@@ -261,8 +153,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code != http.StatusNotModified
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusNotModified},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -270,10 +162,10 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `must-understand`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"must-understand"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MustUnderstand: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -287,10 +179,10 @@ func TestConfig_CanStore(t *testing.T) {
 					return code == http.StatusOK
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"must-understand"},
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MustUnderstand: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -304,10 +196,10 @@ func TestConfig_CanStore(t *testing.T) {
 					return code != http.StatusOK
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"must-understand"},
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MustUnderstand: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -318,10 +210,10 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `no-store`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"no-store"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					NoStore: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -332,10 +224,10 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"private"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Private: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -345,10 +237,11 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private, with headers`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"private=header"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Private:        true,
+					PrivateHeaders: []string{"header"},
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -358,10 +251,11 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private, with headers, RespectPrivateHeaders set`,
 			config: httpcache.Config{RespectPrivateHeaders: true},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"private=header"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Private:        true,
+					PrivateHeaders: []string{"header"},
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -372,13 +266,11 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Authorization": {"Bearer foo:bar"},
-				},
-				Method: "GET",
+			req: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     "GET",
 			},
-			resp: httpcache.Response{
+			resp: httpcache.ResponseMetadata{
 				StatusCode: http.StatusOK,
 			},
 			wantPublic:  false,
@@ -387,15 +279,13 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, must-revalidate`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Authorization": {"Bearer foo:bar"},
-				},
-				Method: "GET",
+			req: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     "GET",
 			},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"must-revalidate"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MustRevalidate: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -405,15 +295,13 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, public`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Authorization": {"Bearer foo:bar"},
-				},
-				Method: "GET",
+			req: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     "GET",
 			},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"public"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Public: true,
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -423,15 +311,13 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, s-max-age > 0`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Authorization": {"Bearer foo:bar"},
-				},
-				Method: "GET",
+			req: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     "GET",
 			},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"s-maxage=5"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					SMaxAge: OptValue(5 * time.Second),
 				},
 				StatusCode: http.StatusOK,
 			},
@@ -441,27 +327,25 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, s-max-age == 0`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Authorization": {"Bearer foo:bar"},
-				},
-				Method: "GET",
+			req: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     "GET",
 			},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"s-maxage=0"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					SMaxAge: OptValue(0 * time.Second),
 				},
 				StatusCode: http.StatusOK,
 			},
-			wantPublic:  false,
+			wantPublic:  true,
 			wantPrivate: true,
 		},
 
 		{
 			name:   `heuristically cacheable status code`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
 				StatusCode: http.StatusOK,
 			},
 			wantPublic:  true,
@@ -474,8 +358,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code == http.StatusOK
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -486,16 +370,16 @@ func TestConfig_CanStore(t *testing.T) {
 					return code != http.StatusOK
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 		{
 			name:        `non-heuristically cacheable status`,
 			config:      httpcache.Config{},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusCreated},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -506,8 +390,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code == http.StatusCreated
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusCreated},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -518,8 +402,8 @@ func TestConfig_CanStore(t *testing.T) {
 					return code != http.StatusCreated
 				},
 			},
-			req:         httpcache.Request{Method: "GET"},
-			resp:        httpcache.Response{StatusCode: http.StatusCreated},
+			req:         httpcache.RequestMetadata{Method: "GET"},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -527,10 +411,10 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `public`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"public"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Public: true,
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
@@ -541,10 +425,10 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"private"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					Private: true,
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
@@ -555,37 +439,22 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `expires`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Expires": {"Wed, 21 Oct 2015 07:28:00 GMT"},
-				},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Expires:    time.Date(2015, time.October, 21, 7, 28, 0, 0, time.UTC),
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
-		{
-			name:   `invalid expires`,
-			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Expires": {"Wed, 21 Oct 2015 07:28:00"}, // missing timezone
-				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
 
 		{
 			name:   `max-age > 0`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"max-age=5"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(5 * time.Second),
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
@@ -595,24 +464,24 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `max-age == 0`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"max-age=0"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(0 * time.Second),
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
-			wantPublic:  false,
-			wantPrivate: false,
+			wantPublic:  true,
+			wantPrivate: true,
 		},
 
 		{
 			name:   `s-maxage > 0`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"s-maxage=5"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					SMaxAge: OptValue(5 * time.Second),
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
@@ -622,26 +491,26 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `s-maxage == 0`,
 			config: httpcache.Config{},
-			req:    httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
-				Header: http.Header{
-					"Cache-Control": {"s-maxage=0"},
+			req:    httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
+				Directives: httpcache.ResponseDirectives{
+					SMaxAge: OptValue(0 * time.Second),
 				},
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
-			wantPublic:  false,
+			wantPublic:  true,
 			wantPrivate: false,
 		},
 
 		{
 			name: `extension allows caching`,
 			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.Request, resp httpcache.Response) bool {
+				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
 					return true
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
@@ -650,12 +519,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name: `extension does not allow caching`,
 			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.Request, resp httpcache.Response) bool {
+				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
 					return false
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
 				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  false,
@@ -664,12 +533,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name: `extension does not allow caching, but caching is allowed otherwise`,
 			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.Request, resp httpcache.Response) bool {
+				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
 					return false
 				},
 			},
-			req: httpcache.Request{Method: "GET"},
-			resp: httpcache.Response{
+			req: httpcache.RequestMetadata{Method: "GET"},
+			resp: httpcache.ResponseMetadata{
 				StatusCode: http.StatusOK, // heuristically cacheable
 			},
 			wantPublic:  true,
@@ -679,26 +548,26 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `request no-store`,
 			config: httpcache.Config{},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Cache-Control": {"no-store"},
+			req: httpcache.RequestMetadata{
+				Directives: httpcache.RequestDirectives{
+					NoStore: true,
 				},
 				Method: "GET",
 			},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 		{
 			name:   `request no-store, IgnoreRequestDirectiveNoStore set`,
 			config: httpcache.Config{IgnoreRequestDirectiveNoStore: true},
-			req: httpcache.Request{
-				Header: http.Header{
-					"Cache-Control": {"no-store"},
+			req: httpcache.RequestMetadata{
+				Directives: httpcache.RequestDirectives{
+					NoStore: true,
 				},
 				Method: "GET",
 			},
-			resp:        httpcache.Response{StatusCode: http.StatusOK},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -832,320 +701,115 @@ func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 	}
 }
 
-func TestRequest_Authorized(t *testing.T) {
+func TestNormalizeVaryHeader(t *testing.T) {
 	tests := []struct {
-		name   string
-		header http.Header
-		want   bool
+		name string
+		in   []string
+		want []string
 	}{
 		{
-			name: `no header`,
+			name: `no values`,
 		},
 		{
-			name: `empty header`,
-			header: http.Header{
-				"Authorization": {""},
-			},
-			want: true,
-		},
-		{
-			name: `non-empty header`,
-			header: http.Header{
-				"Authorization": {"Bearer test"},
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Request{Header: tt.header}
-
-			got := r.Authorized()
-			if got != tt.want {
-				t.Errorf("Request.Authorized() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRequest_Directives(t *testing.T) {
-	tests := []struct {
-		name    string
-		header  http.Header
-		want    httpcache.RequestDirectives
-		wantErr bool
-	}{
-		{
-			name: `no header`,
-		},
-		{
-			name: `empty header`,
-			header: http.Header{
-				"Cache-Control": {""},
-			},
-		},
-		{
-			name: `valid`,
-			header: http.Header{
-				"Cache-Control": {"max-age=5, no-cache, no-transform"},
-			},
-			want: httpcache.RequestDirectives{
-				MaxAge:      5 * time.Second,
-				NoCache:     true,
-				NoTransform: true,
-			},
-		},
-		{
-			name: `invalid`,
-			header: http.Header{
-				"Cache-Control": {"max-age=abc, no-cache, no-transform"},
-			},
-			want: httpcache.RequestDirectives{
-				NoCache:     true,
-				NoTransform: true,
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Request{Header: tt.header}
-
-			got, err := r.Directives()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Request.Directives() error = %v, want %v", err, tt.wantErr)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Directives() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResponse_Age(t *testing.T) {
-	tests := []struct {
-		name    string
-		header  http.Header
-		want    time.Duration
-		wantErr bool
-	}{
-		{
-			name: `no header`,
-		},
-		{
-			name: `empty header`,
-			header: http.Header{
-				"Age": {""},
-			},
-			wantErr: true,
-		},
-		{
-			name: `valid age`,
-			header: http.Header{
-				"Age": {"123"},
-			},
-			want: 123 * time.Second,
-		},
-		{
-			name: `invalid age`,
-			header: http.Header{
-				"Age": {"test"},
-			},
-			wantErr: true,
-		},
-		{
-			name: `multiple values`,
-			header: http.Header{
-				"Age": {"1234", "1234"},
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Response{Header: tt.header}
-
-			got, err := r.Age()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Response.Age() error = %v, want %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Age() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResponse_Directives(t *testing.T) {
-	tests := []struct {
-		name    string
-		header  http.Header
-		want    httpcache.ResponseDirectives
-		wantErr bool
-	}{
-		{
-			name: `no header`,
-		},
-		{
-			name: `empty header`,
-			header: http.Header{
-				"Cache-Control": {""},
-			},
-		},
-		{
-			name: `valid`,
-			header: http.Header{
-				"Cache-Control": {"max-age=5, no-cache, no-transform"},
-			},
-			want: httpcache.ResponseDirectives{
-				MaxAge:      5 * time.Second,
-				NoCache:     true,
-				NoTransform: true,
-			},
-		},
-		{
-			name: `invalid`,
-			header: http.Header{
-				"Cache-Control": {"max-age=abc, no-cache, no-transform"},
-			},
-			want: httpcache.ResponseDirectives{
-				NoCache:     true,
-				NoTransform: true,
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Response{Header: tt.header}
-
-			got, err := r.Directives()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Response.Directives() error = %v, want %v", err, tt.wantErr)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Directives() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResponse_Expires(t *testing.T) {
-	tests := []struct {
-		name    string
-		header  http.Header
-		want    time.Time
-		wantErr bool
-	}{
-		{
-			name: `no header`,
-		},
-		{
-			name: `empty header`,
-			header: http.Header{
-				"Expires": {""},
-			},
-			wantErr: true,
-		},
-		{
-			name: `valid Expires`,
-			header: http.Header{
-				"Expires": {`Wed, 21 Oct 2015 07:28:00 GMT`},
-			},
-			want: time.Date(2015, time.October, 21, 07, 28, 0, 0, time.UTC),
-		},
-		{
-			name: `invalid Expires`,
-			header: http.Header{
-				"Expires": {"test"},
-			},
-			wantErr: true,
-		},
-		{
-			name: `multiple values`,
-			header: http.Header{
-				"Expires": {"Wed, 21 Oct 2015 07:28:00 GMT", "Wed, 21 Oct 2015 07:28:00 GMT"},
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Response{Header: tt.header}
-
-			got, err := r.Expires()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Response.Expires() error = %v, want %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Expires() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResponse_Vary(t *testing.T) {
-	tests := []struct {
-		name   string
-		header http.Header
-		want   []string
-	}{
-		{
-			name: `no header`,
-		},
-		{
-			name: `empty header`,
-			header: http.Header{
-				"Vary": {},
-			},
+			name: `empty slice`,
+			in:   []string{},
 		},
 		{
 			name: `single header`,
-			header: http.Header{
-				"Vary": {" header-3, HEADER-1 ,Header-2 , HeAdEr-4 "},
-			},
+			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 "},
 			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
 		},
 		{
 			name: `single header with duplicates`,
-			header: http.Header{
-				"Vary": {" header-3, HEADER-1 ,Header-2 , HeAdEr-4 , Header-1, Header-3"},
-			},
+			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 , Header-1, Header-3"},
 			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
 		},
 		{
 			name: `multiple headers`,
-			header: http.Header{
-				"Vary": {" header-3, HEADER-1", "Header-2 , HeAdEr-4"},
-			},
+			in:   []string{" header-3, HEADER-1", "Header-2 , HeAdEr-4"},
 			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
 		},
 		{
 			name: `multiple headers with duplicates`,
-			header: http.Header{
-				"Vary": {" header-3, HEADER-1 ,Header-2", "HeAdEr-4 , Header-1, Header-3"},
-			},
+			in:   []string{" header-3, HEADER-1 ,Header-2", "HeAdEr-4 , Header-1, Header-3"},
 			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httpcache.Response{Header: tt.header}
-
-			got := r.Vary()
+			got := httpcache.NormalizeVaryHeader(tt.in)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Response.Vary() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestParseAge(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{
+			name: `basic`,
+			in:   `32`,
+			want: 32 * time.Second,
+		},
+		{
+			name: `zero`,
+			in:   `0`,
+		},
+		{
+			name:    `negative`,
+			in:      `-5`,
+			wantErr: true,
+		},
+		{
+			name:    `explicit plus`,
+			in:      `+5`,
+			wantErr: true,
+		},
+		{
+			name:    `float`,
+			in:      `1.5`,
+			wantErr: true,
+		},
+		{
+			name:    `empty`,
+			in:      ``,
+			wantErr: true,
+		},
+		{
+			name: `overflow time.Duration`,
+			in:   `9223372036854775806`,
+			want: time.Duration(math.MaxInt64),
+		},
+		{
+			name: `overflow int64`,
+			in:   `9223372037`,
+			want: time.Duration(math.MaxInt64),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseAge(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseAge() error = %v, want %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseAge() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func OptValue[T any](t T) httpcache.Opt[T] {
+	return httpcache.Opt[T]{Value: t, Valid: true}
 }
 
 func TestParseRequestDirectives(t *testing.T) {
@@ -1169,9 +833,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `full`,
 			in:   `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached`,
 			want: httpcache.RequestDirectives{
-				MaxAge:       100 * time.Second,
-				MaxStale:     200 * time.Second,
-				MinFresh:     300 * time.Second,
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1182,9 +846,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `full with extensions`,
 			in:   `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test"`,
 			want: httpcache.RequestDirectives{
-				MaxAge:       100 * time.Second,
-				MaxStale:     200 * time.Second,
-				MinFresh:     300 * time.Second,
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1209,9 +873,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `case-insensitive`,
 			in:   `MAX-AGE=100, MAX-STALE=200, MIN-FRESH=300, NO-CACHE, NO-STORE, NO-TRANSFORM, ONLY-IF-CACHED`,
 			want: httpcache.RequestDirectives{
-				MaxAge:       100 * time.Second,
-				MaxStale:     200 * time.Second,
-				MinFresh:     300 * time.Second,
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1223,9 +887,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			in: `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test", ` +
 				`max-age=150, max-stale=250, min-fresh=350, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test2"`,
 			want: httpcache.RequestDirectives{
-				MaxAge:       150 * time.Second,
-				MaxStale:     250 * time.Second,
-				MinFresh:     350 * time.Second,
+				MaxAge:       OptValue(150 * time.Second),
+				MaxStale:     OptValue(250 * time.Second),
+				MinFresh:     OptValue(350 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1253,7 +917,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second max-age`,
 			in:   `no-cache, max-age=100, max-age=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MaxAge:  100 * time.Second,
+				MaxAge:  OptValue(100 * time.Second),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -1276,7 +940,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second max-stale`,
 			in:   `no-cache, max-stale=200, max-stale=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MaxStale: 200 * time.Second,
+				MaxStale: OptValue(200 * time.Second),
 				NoCache:  true,
 				NoStore:  true,
 			},
@@ -1299,7 +963,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second min-fresh`,
 			in:   `no-cache, min-fresh=300, min-fresh=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MinFresh: 300 * time.Second,
+				MinFresh: OptValue(300 * time.Second),
 				NoCache:  true,
 				NoStore:  true,
 			},
@@ -1370,9 +1034,9 @@ func TestRequestDirectives_String(t *testing.T) {
 		{
 			name: `full`,
 			in: httpcache.RequestDirectives{
-				MaxAge:       100 * time.Second,
-				MaxStale:     200 * time.Second,
-				MinFresh:     300 * time.Second,
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1383,9 +1047,9 @@ func TestRequestDirectives_String(t *testing.T) {
 		{
 			name: `full with extensions`,
 			in: httpcache.RequestDirectives{
-				MaxAge:       100 * time.Second,
-				MaxStale:     200 * time.Second,
-				MinFresh:     300 * time.Second,
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
 				NoCache:      true,
 				NoStore:      true,
 				NoTransform:  true,
@@ -1403,6 +1067,86 @@ func TestRequestDirectives_String(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.in.String(); got != tt.want {
 				t.Errorf("RequestDirectives.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequestMetadataFromRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      http.Request
+		want    httpcache.RequestMetadata
+		wantErr bool
+	}{
+		{
+			name: `empty request`,
+			in:   http.Request{},
+			want: httpcache.RequestMetadata{},
+		},
+		{
+			name: `with authorization header`,
+			in: http.Request{
+				Method: http.MethodGet,
+				Header: http.Header{
+					"Authorization": []string{"Test"},
+				},
+			},
+			want: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     http.MethodGet,
+			},
+		},
+		{
+			name: `with empty authorization header`,
+			in: http.Request{
+				Method: http.MethodGet,
+				Header: http.Header{
+					"Authorization": []string{""},
+				},
+			},
+			want: httpcache.RequestMetadata{
+				Authorized: true,
+				Method:     http.MethodGet,
+			},
+		},
+		{
+			name: `with cache-control`,
+			in: http.Request{
+				Method: http.MethodGet,
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=5, no-cache"},
+				},
+			},
+			want: httpcache.RequestMetadata{
+				Directives: httpcache.RequestDirectives{
+					MaxAge:  OptValue(5 * time.Second),
+					NoCache: true,
+				},
+				Method: http.MethodGet,
+			},
+		},
+		{
+			name: `with invalid cache-control`,
+			in: http.Request{
+				Method: http.MethodGet,
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=test, no-cache"},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.RequestMetadataFromRequest(&tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RequestMetadataFromRequest() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("RequestMetadataFromRequest() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -1429,7 +1173,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `full`,
 			in:   `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:          100 * time.Second,
+				MaxAge:          OptValue(100 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1440,14 +1184,14 @@ func TestParseResponseDirectives(t *testing.T) {
 				PrivateHeaders:  []string{"Header-3", "Header-4"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         200 * time.Second,
+				SMaxAge:         OptValue(200 * time.Second),
 			},
 		},
 		{
 			name: `full with extensions`,
 			in:   `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test"`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:          100 * time.Second,
+				MaxAge:          OptValue(100 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1458,7 +1202,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				PrivateHeaders:  []string{"Header-3", "Header-4"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         200 * time.Second,
+				SMaxAge:         OptValue(200 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: "test", HasValue: true},
@@ -1479,7 +1223,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `case-insensitive`,
 			in:   `MAX-AGE=100, MUST-REVALIDATE, MUST-UNDERSTAND, NO-CACHE="HEADER-1 HEADER-2", NO-STORE, NO-TRANSFORM, PRIVATE="HEADER-3 HEADER-4", PROXY-REVALIDATE, PUBLIC, S-MAXAGE=200`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:          100 * time.Second,
+				MaxAge:          OptValue(100 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1490,7 +1234,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				PrivateHeaders:  []string{"HEADER-3", "HEADER-4"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         200 * time.Second,
+				SMaxAge:         OptValue(200 * time.Second),
 			},
 		},
 		{
@@ -1498,7 +1242,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
 				`max-age=150, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=250, extra, extra-with-value="test2"`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:          150 * time.Second,
+				MaxAge:          OptValue(150 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1509,7 +1253,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				PrivateHeaders:  []string{"Header-7", "Header-8"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         250 * time.Second,
+				SMaxAge:         OptValue(250 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: "test", HasValue: true},
@@ -1533,7 +1277,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `invalid second max-age`,
 			in:   `no-cache, max-age=100, max-age=test, no-store`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:  100 * time.Second,
+				MaxAge:  OptValue(100 * time.Second),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -1558,7 +1302,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			want: httpcache.ResponseDirectives{
 				NoCache: true,
 				NoStore: true,
-				SMaxAge: 200 * time.Second,
+				SMaxAge: OptValue(200 * time.Second),
 			},
 			wantErr: []string{
 				"invalid value for s-maxage: invalid value for delta-seconds",
@@ -1659,7 +1403,7 @@ func TestResponseDirectives_String(t *testing.T) {
 		{
 			name: `full`,
 			in: httpcache.ResponseDirectives{
-				MaxAge:          100 * time.Second,
+				MaxAge:          OptValue(100 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1670,14 +1414,14 @@ func TestResponseDirectives_String(t *testing.T) {
 				PrivateHeaders:  []string{"Header-3", "Header-4"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         200 * time.Second,
+				SMaxAge:         OptValue(200 * time.Second),
 			},
 			want: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200`,
 		},
 		{
 			name: `full with extensions`,
 			in: httpcache.ResponseDirectives{
-				MaxAge:          100 * time.Second,
+				MaxAge:          OptValue(100 * time.Second),
 				MustRevalidate:  true,
 				MustUnderstand:  true,
 				NoCache:         true,
@@ -1688,7 +1432,7 @@ func TestResponseDirectives_String(t *testing.T) {
 				PrivateHeaders:  []string{"Header-3", "Header-4"},
 				ProxyRevalidate: true,
 				Public:          true,
-				SMaxAge:         200 * time.Second,
+				SMaxAge:         OptValue(200 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: "test", HasValue: true},
@@ -1702,6 +1446,202 @@ func TestResponseDirectives_String(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.in.String(); got != tt.want {
 				t.Errorf("ResponseDirectives.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponseMetadataFromResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      http.Response
+		want    httpcache.ResponseMetadata
+		wantErr bool
+	}{
+		{
+			name:    `empty response`,
+			wantErr: true,
+		},
+		{
+			name: `minimal response`,
+			in: http.Response{
+				Header: http.Header{
+					"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+				},
+				StatusCode: http.StatusOK,
+			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+			},
+		},
+		{
+			name: `full response`,
+			in: http.Response{
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=5"},
+					"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
+					"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
+				},
+				StatusCode: http.StatusOK,
+			},
+			want: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(5 * time.Second),
+				},
+				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
+			},
+		},
+		{
+			name: `invalid cache-control`,
+			in: http.Response{
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=test"},
+					"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+				},
+				StatusCode: http.StatusOK,
+			},
+			wantErr: true,
+		},
+		{
+			name: `invalid date`,
+			in: http.Response{
+				Header: http.Header{
+					"Date": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+				},
+				StatusCode: http.StatusOK,
+			},
+			wantErr: true,
+		},
+		{
+			name: `invalid expires`,
+			in: http.Response{
+				Header: http.Header{
+					"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					"Expires": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+				},
+				StatusCode: http.StatusOK,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ResponseMetadataFromResponse(&tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ResponseMetadataFromResponse() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("ResponseMetadataFromResponse() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata httpcache.ResponseMetadata
+		shared   bool
+		want     time.Duration
+		wantOk   bool
+	}{
+		{
+			name: `no s-maxage, no max-age, no expires`,
+		},
+		{
+			name:   `no s-maxage, no max-age, no expires, shared`,
+			shared: true,
+		},
+
+		{
+			name: `no s-maxage, no max-age, expires`,
+			metadata: httpcache.ResponseMetadata{
+				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			want:   time.Minute,
+			wantOk: true,
+		},
+		{
+			name: `no s-maxage, no max-age, expires, shared`,
+			metadata: httpcache.ResponseMetadata{
+				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			shared: true,
+			want:   time.Minute,
+			wantOk: true,
+		},
+
+		{
+			name: `no s-maxage, max-age, expires`,
+			metadata: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(5 * time.Second),
+				},
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+		{
+			name: `no s-maxage, max-age, expires, shared`,
+			metadata: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(5 * time.Second),
+				},
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			shared: true,
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+
+		{
+			name: `s-maxage, max-age, expires`,
+			metadata: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge:  OptValue(5 * time.Second),
+					SMaxAge: OptValue(10 * time.Second),
+				},
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+		{
+			name: `s-maxage, max-age, expires, shared`,
+			metadata: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge:  OptValue(5 * time.Second),
+					SMaxAge: OptValue(10 * time.Second),
+				},
+				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			shared: true,
+			want:   10 * time.Second,
+			wantOk: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotOk := tt.metadata.FreshnessLifetime(tt.shared)
+			if got != tt.want {
+				t.Errorf("FreshnessLifetime() got = %v, want %v", got, tt.want)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("FreshnessLifetime() gotOk = %v, want %v", gotOk, tt.wantOk)
 			}
 		})
 	}
