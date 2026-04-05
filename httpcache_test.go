@@ -855,7 +855,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				OnlyIfCached: true,
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 		},
@@ -865,7 +865,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			want: httpcache.RequestDirectives{
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 		},
@@ -896,9 +896,9 @@ func TestParseRequestDirectives(t *testing.T) {
 				OnlyIfCached: true,
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test2", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
 			},
 			wantErr: []string{
@@ -921,9 +921,9 @@ func TestParseRequestDirectives(t *testing.T) {
 				OnlyIfCached: true,
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test2", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
 			},
 		},
@@ -1006,7 +1006,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoCache: true,
 				NoStore: true,
 				Extensions: []httpcache.ExtensionDirective{
-					{Name: "extra-with-value", Value: `"test`, HasValue: true},
+					{Name: "extra-with-value", Value: OptValue(`"test`)},
 				},
 			},
 		},
@@ -1084,7 +1084,7 @@ func TestRequestDirectives_String(t *testing.T) {
 				OnlyIfCached: true,
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 			want: `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test"`,
@@ -1252,7 +1252,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				SMaxAge:         OptValue(200 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 		},
@@ -1262,7 +1262,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			want: httpcache.ResponseDirectives{
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 		},
@@ -1303,9 +1303,9 @@ func TestParseResponseDirectives(t *testing.T) {
 				SMaxAge:         OptValue(0 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test2", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
 			},
 			wantErr: []string{
@@ -1332,9 +1332,9 @@ func TestParseResponseDirectives(t *testing.T) {
 				SMaxAge:         OptValue(200 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test2", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
 			},
 		},
@@ -1393,7 +1393,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				NoCache: true,
 				NoStore: true,
 				Extensions: []httpcache.ExtensionDirective{
-					{Name: "extra-with-value", Value: `"test`, HasValue: true},
+					{Name: "extra-with-value", Value: OptValue(`"test`)},
 				},
 			},
 		},
@@ -1513,7 +1513,7 @@ func TestResponseDirectives_String(t *testing.T) {
 				SMaxAge:         OptValue(200 * time.Second),
 				Extensions: []httpcache.ExtensionDirective{
 					{Name: "extra"},
-					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra-with-value", Value: OptValue("test")},
 				},
 			},
 			want: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test"`,

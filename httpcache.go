@@ -323,17 +323,14 @@ type ExtensionDirective struct {
 	// Name of the directive. May be empty if HasValue is true.
 	Name string
 
-	// Value of the directive, if any. May be empty. CanStore HasValue to differentiate between an empty and no value.
-	Value string
-
-	// HasValue is true if Value is set.
-	HasValue bool
+	// Value of the directive, if any.
+	Value Opt[string]
 }
 
 // String implements the [fmt.Stringer] interface.
 func (e ExtensionDirective) String() string {
-	if e.HasValue {
-		return e.Name + `="` + e.Value + `"`
+	if e.Value.Valid {
+		return e.Name + `="` + e.Value.Value + `"`
 	}
 	return e.Name
 }
@@ -482,7 +479,10 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 		case "only-if-cached":
 			c.OnlyIfCached = true
 		default:
-			c.Extensions = append(c.Extensions, ExtensionDirective(d))
+			c.Extensions = append(c.Extensions, ExtensionDirective{
+				Name:  d.Name,
+				Value: Opt[string]{Value: d.Value, Valid: d.HasValue},
+			})
 		}
 	}
 
@@ -698,7 +698,10 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 
 			c.SMaxAge.Value, c.SMaxAge.Valid = dur, true
 		default:
-			c.Extensions = append(c.Extensions, ExtensionDirective(d))
+			c.Extensions = append(c.Extensions, ExtensionDirective{
+				Name:  d.Name,
+				Value: Opt[string]{Value: d.Value, Valid: d.HasValue},
+			})
 		}
 	}
 
