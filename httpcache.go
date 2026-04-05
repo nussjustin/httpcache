@@ -536,10 +536,13 @@ type RequestMetadata struct {
 
 	// Directives contains the parsed Cache-Control directives.
 	Directives RequestDirectives
+
+	// Time contains the time at which the request was sent.
+	Time time.Time
 }
 
 // RequestMetadataFromRequest builds a RequestMetadata object from an actual HTTP request.
-func RequestMetadataFromRequest(req *http.Request) (RequestMetadata, error) {
+func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadata, error) {
 	dir, err := ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
 	if err != nil {
 		// TODO: Test
@@ -550,6 +553,7 @@ func RequestMetadataFromRequest(req *http.Request) (RequestMetadata, error) {
 		Authorized: len(req.Header["Authorization"]) != 0,
 		Method:     req.Method,
 		Directives: dir,
+		Time:       at,
 	}, nil
 }
 
@@ -772,6 +776,9 @@ type ResponseMetadata struct {
 	// StatusCode is the final HTTP response code used for the response.
 	StatusCode int
 
+	// Time contains the time at which the response was received.
+	Time time.Time
+
 	// Vary contains a normalized list of headers to vary the response by.
 	//
 	// See [NormalizeVaryHeader] for more information.
@@ -785,7 +792,7 @@ var (
 // ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
 //
 // If the response has multiple Expires header values, the first one is used.
-func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error) {
+func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMetadata, error) {
 	dir, err := ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
 	if err != nil {
 		// TODO: Test
@@ -795,6 +802,7 @@ func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error)
 	d := ResponseMetadata{
 		StatusCode: resp.StatusCode,
 		Directives: dir,
+		Time:       at,
 		Vary:       NormalizeVaryHeader(resp.Header["Vary"]),
 	}
 

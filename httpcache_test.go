@@ -1101,50 +1101,65 @@ func TestRequestDirectives_String(t *testing.T) {
 }
 
 func TestRequestMetadataFromRequest(t *testing.T) {
+	now := time.Now()
+	type args struct {
+		req http.Request
+		at  time.Time
+	}
 	tests := []struct {
 		name    string
-		in      http.Request
+		args    args
 		want    httpcache.RequestMetadata
 		wantErr bool
 	}{
 		{
-			name: `empty request`,
-			in:   http.Request{},
+			name: `empty values`,
 			want: httpcache.RequestMetadata{},
 		},
 		{
 			name: `with authorization header`,
-			in: http.Request{
-				Method: http.MethodGet,
-				Header: http.Header{
-					"Authorization": []string{"Test"},
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"Authorization": []string{"Test"},
+					},
 				},
+				at: now,
 			},
 			want: httpcache.RequestMetadata{
 				Authorized: true,
 				Method:     http.MethodGet,
+				Time:       now,
 			},
 		},
 		{
 			name: `with empty authorization header`,
-			in: http.Request{
-				Method: http.MethodGet,
-				Header: http.Header{
-					"Authorization": []string{""},
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"Authorization": []string{""},
+					},
 				},
+				at: now,
 			},
 			want: httpcache.RequestMetadata{
 				Authorized: true,
 				Method:     http.MethodGet,
+				Time:       now,
 			},
 		},
 		{
 			name: `with cache-control`,
-			in: http.Request{
-				Method: http.MethodGet,
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=5, no-cache"},
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"Cache-Control": []string{"max-age=5, no-cache"},
+					},
 				},
+				at: now,
 			},
 			want: httpcache.RequestMetadata{
 				Directives: httpcache.RequestDirectives{
@@ -1152,15 +1167,19 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 					NoCache: true,
 				},
 				Method: http.MethodGet,
+				Time:   now,
 			},
 		},
 		{
 			name: `with invalid cache-control`,
-			in: http.Request{
-				Method: http.MethodGet,
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=test, no-cache"},
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"Cache-Control": []string{"max-age=test, no-cache"},
+					},
 				},
+				at: now,
 			},
 			wantErr: true,
 		},
@@ -1168,7 +1187,7 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.RequestMetadataFromRequest(&tt.in)
+			got, err := httpcache.RequestMetadataFromRequest(&tt.args.req, tt.args.at)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("RequestMetadataFromRequest() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1511,39 +1530,52 @@ func TestResponseDirectives_String(t *testing.T) {
 }
 
 func TestResponseMetadataFromResponse(t *testing.T) {
+	now := time.Now()
+
+	type args struct {
+		resp http.Response
+		at   time.Time
+	}
 	tests := []struct {
 		name    string
-		in      http.Response
+		args    args
 		want    httpcache.ResponseMetadata
 		wantErr bool
 	}{
 		{
-			name:    `empty response`,
+			name:    `empty values`,
 			wantErr: true,
 		},
 		{
 			name: `minimal response`,
-			in: http.Response{
-				Header: http.Header{
-					"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			want: httpcache.ResponseMetadata{
 				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				StatusCode: http.StatusOK,
+				Time:       now,
 			},
 		},
 		{
 			name: `full response`,
-			in: http.Response{
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=5"},
-					"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
-					"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Cache-Control": []string{"max-age=5"},
+						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
+						"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
+					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			want: httpcache.ResponseMetadata{
 				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
@@ -1552,64 +1584,78 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				},
 				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
 				StatusCode: http.StatusOK,
+				Time:       now,
 				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
 			},
 		},
 		{
 			name: `invalid cache-control`,
-			in: http.Response{
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=test"},
-					"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Cache-Control": []string{"max-age=test"},
+						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			wantErr: true,
 		},
 		{
 			name: `invalid date`,
-			in: http.Response{
-				Header: http.Header{
-					"Date": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			wantErr: true,
 		},
 		{
 			name: `invalid expires`,
-			in: http.Response{
-				Header: http.Header{
-					"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					"Expires": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Expires": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			wantErr: true,
 		},
 		{
 			name: `multiple expires`,
-			in: http.Response{
-				Header: http.Header{
-					"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					"Expires": []string{
-						"Mon, 02 Jan 2006 15:04:05 GMT",
-						"Mon, 03 Jan 2006 15:04:05 GMT",
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Expires": []string{
+							"Mon, 02 Jan 2006 15:04:05 GMT",
+							"Mon, 03 Jan 2006 15:04:05 GMT",
+						},
 					},
+					StatusCode: http.StatusOK,
 				},
-				StatusCode: http.StatusOK,
+				at: now,
 			},
 			want: httpcache.ResponseMetadata{
 				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				StatusCode: http.StatusOK,
+				Time:       now,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ResponseMetadataFromResponse(&tt.in)
+			got, err := httpcache.ResponseMetadataFromResponse(&tt.args.resp, tt.args.at)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResponseMetadataFromResponse() error = %v, wantErr %v", err, tt.wantErr)
 				return
