@@ -3,7 +3,6 @@ package httpcache
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"net/textproto"
@@ -384,6 +383,11 @@ var (
 	errConflictingMaxStale = errors.New("conflicting values found for directive max-stale")
 	errConflictingMinFresh = errors.New("conflicting values found for directive min-fresh")
 	errConflictingSMaxAge  = errors.New("conflicting values found for directive s-maxage")
+
+	errInvalidMaxAge   = errors.New("invalid value for max-age")
+	errInvalidMaxStale = errors.New("invalid value for max-stale")
+	errInvalidMinFresh = errors.New("invalid value for min-fresh")
+	errInvalidSMaxAge  = errors.New("invalid value for s-maxage")
 )
 
 // ParseRequestDirectives parses a Cache-Control request header and returns a struct of the parsed directives.
@@ -408,7 +412,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if err != nil {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
+				errs = append(errs, errInvalidMaxAge)
 				break
 			}
 
@@ -430,7 +434,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if err != nil {
 				c.MaxStale.Value, c.MaxStale.Valid = 0, true
 
-				errs = append(errs, fmt.Errorf("invalid value for max-stale: %w", err))
+				errs = append(errs, errInvalidMaxStale)
 				break
 			}
 
@@ -452,7 +456,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if err != nil {
 				c.MinFresh.Value, c.MinFresh.Valid = math.MaxInt64, true
 
-				errs = append(errs, fmt.Errorf("invalid value for min-fresh: %w", err))
+				errs = append(errs, errInvalidMinFresh)
 				break
 			}
 
@@ -623,7 +627,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			if err != nil {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
+				errs = append(errs, errInvalidMaxAge)
 				break
 			}
 
@@ -673,7 +677,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			if err != nil {
 				c.SMaxAge.Value, c.SMaxAge.Valid = 0, true
 
-				errs = append(errs, fmt.Errorf("invalid value for s-maxage: %w", err))
+				errs = append(errs, errInvalidSMaxAge)
 				break
 			}
 

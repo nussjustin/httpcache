@@ -936,7 +936,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore: true,
 			},
 			wantErr: []string{
-				"invalid value for max-age: invalid value for delta-seconds",
+				"invalid value for max-age",
 			},
 		},
 		{
@@ -948,7 +948,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore: true,
 			},
 			wantErr: []string{
-				"invalid value for max-age: invalid value for delta-seconds",
+				"invalid value for max-age",
 			},
 		},
 		{
@@ -960,7 +960,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:  true,
 			},
 			wantErr: []string{
-				"invalid value for max-stale: invalid value for delta-seconds",
+				"invalid value for max-stale",
 			},
 		},
 		{
@@ -972,7 +972,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:  true,
 			},
 			wantErr: []string{
-				"invalid value for max-stale: invalid value for delta-seconds",
+				"invalid value for max-stale",
 			},
 		},
 		{
@@ -984,7 +984,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:  true,
 			},
 			wantErr: []string{
-				"invalid value for min-fresh: invalid value for delta-seconds",
+				"invalid value for min-fresh",
 			},
 		},
 		{
@@ -996,7 +996,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:  true,
 			},
 			wantErr: []string{
-				"invalid value for min-fresh: invalid value for delta-seconds",
+				"invalid value for min-fresh",
 			},
 		},
 		{
@@ -1328,7 +1328,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				NoStore: true,
 			},
 			wantErr: []string{
-				"invalid value for max-age: invalid value for delta-seconds",
+				"invalid value for max-age",
 			},
 		},
 		{
@@ -1340,7 +1340,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				NoStore: true,
 			},
 			wantErr: []string{
-				"invalid value for max-age: invalid value for delta-seconds",
+				"invalid value for max-age",
 			},
 		},
 		{
@@ -1352,7 +1352,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				SMaxAge: OptValue(time.Duration(0)),
 			},
 			wantErr: []string{
-				"invalid value for s-maxage: invalid value for delta-seconds",
+				"invalid value for s-maxage",
 			},
 		},
 		{
@@ -1364,7 +1364,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				SMaxAge: OptValue(time.Duration(0)),
 			},
 			wantErr: []string{
-				"invalid value for s-maxage: invalid value for delta-seconds",
+				"invalid value for s-maxage",
 			},
 		},
 		{
