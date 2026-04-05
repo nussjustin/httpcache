@@ -1589,6 +1589,47 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 			},
 		},
 		{
+			name: `full response with Age header`,
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Age":           []string{"3"},
+						"Cache-Control": []string{"max-age=5"},
+						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
+						"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
+					},
+					StatusCode: http.StatusOK,
+				},
+				at: now,
+			},
+			want: httpcache.ResponseMetadata{
+				Age:  OptValue(3 * time.Second),
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge: OptValue(5 * time.Second),
+				},
+				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Time:       now,
+				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
+			},
+		},
+		{
+			name: `invalid age`,
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Age":  []string{"test"},
+						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
 			name: `invalid cache-control`,
 			args: args{
 				resp: http.Response{
@@ -1671,16 +1712,16 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 	tests := []struct {
 		name     string
 		metadata httpcache.ResponseMetadata
-		shared   bool
+		private  bool
 		want     time.Duration
 		wantOk   bool
 	}{
 		{
-			name: `no s-maxage, no max-age, no expires`,
+			name:    `no s-maxage, no max-age, no expires`,
+			private: true,
 		},
 		{
-			name:   `no s-maxage, no max-age, no expires, shared`,
-			shared: true,
+			name: `no s-maxage, no max-age, no expires, shared`,
 		},
 
 		{
@@ -1689,8 +1730,9 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			want:   time.Minute,
-			wantOk: true,
+			private: true,
+			want:    time.Minute,
+			wantOk:  true,
 		},
 		{
 			name: `no s-maxage, no max-age, expires, shared`,
@@ -1698,7 +1740,6 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			shared: true,
 			want:   time.Minute,
 			wantOk: true,
 		},
@@ -1712,8 +1753,9 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				},
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			want:   5 * time.Second,
-			wantOk: true,
+			private: true,
+			want:    5 * time.Second,
+			wantOk:  true,
 		},
 		{
 			name: `no s-maxage, max-age, expires, shared`,
@@ -1724,7 +1766,6 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				},
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			shared: true,
 			want:   5 * time.Second,
 			wantOk: true,
 		},
@@ -1739,8 +1780,9 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				},
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			want:   5 * time.Second,
-			wantOk: true,
+			private: true,
+			want:    5 * time.Second,
+			wantOk:  true,
 		},
 		{
 			name: `s-maxage, max-age, expires, shared`,
@@ -1752,19 +1794,169 @@ func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
 				},
 				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
 			},
-			shared: true,
 			want:   10 * time.Second,
 			wantOk: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gotOk := tt.metadata.FreshnessLifetime(tt.shared)
+			got, gotOk := tt.metadata.FreshnessLifetime(tt.private)
 			if got != tt.want {
 				t.Errorf("FreshnessLifetime() got = %v, want %v", got, tt.want)
 			}
 			if gotOk != tt.wantOk {
 				t.Errorf("FreshnessLifetime() gotOk = %v, want %v", gotOk, tt.wantOk)
+			}
+		})
+	}
+}
+
+func TestCalculateAge(t *testing.T) {
+	reqTime := time.Now()
+	respDate := reqTime.Add(1 * time.Second)
+	respTime := reqTime.Add(2 * time.Second)
+	now := reqTime.Add(3 * time.Second)
+
+	type args struct {
+		req  httpcache.RequestMetadata
+		resp httpcache.ResponseMetadata
+		now  time.Time
+	}
+	tests := []struct {
+		name string
+		args args
+		want time.Duration
+	}{
+		{
+			name: `with explicit age`,
+			args: args{
+				req: httpcache.RequestMetadata{
+					Time: reqTime,
+				},
+				resp: httpcache.ResponseMetadata{
+					Age:  OptValue(10 * time.Second),
+					Date: respDate,
+					Time: respTime,
+				},
+				now: now,
+			},
+			want: 13 * time.Second,
+		},
+		{
+			name: `without explicit age`,
+			args: args{
+				req: httpcache.RequestMetadata{
+					Time: reqTime,
+				},
+				resp: httpcache.ResponseMetadata{
+					Age:  OptValue(5 * time.Second),
+					Date: respDate,
+					Time: respTime,
+				},
+				now: now,
+			},
+			want: 8 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := httpcache.CalculateAge(tt.args.req, tt.args.resp, tt.args.now); got != tt.want {
+				t.Errorf("CalculateAge() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCalculateFreshness(t *testing.T) {
+	type args struct {
+		currentAge        time.Duration
+		freshnessLifetime time.Duration
+		minFresh          httpcache.Opt[time.Duration]
+		maxAge            httpcache.Opt[time.Duration]
+		maxStale          httpcache.Opt[time.Duration]
+	}
+	tests := []struct {
+		name string
+		args args
+		want httpcache.Freshness
+	}{
+		{
+			name: `fresh`,
+			args: args{
+				currentAge:        5 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+			},
+			want: httpcache.FreshnessFresh,
+		},
+		{
+			name: `fresh with max-age`,
+			args: args{
+				currentAge:        5 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				maxAge:            OptValue(5 * time.Second),
+			},
+			want: httpcache.FreshnessFresh,
+		},
+		{
+			name: `fresh with min-fresh`,
+			args: args{
+				currentAge:        5 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				minFresh:          OptValue(5 * time.Second),
+			},
+			want: httpcache.FreshnessFresh,
+		},
+
+		{
+			name: `expired`,
+			args: args{
+				currentAge:        15 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+			},
+			want: httpcache.FreshnessExpired,
+		},
+		{
+			name: `expired based on max-age`,
+			args: args{
+				currentAge:        5 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				maxAge:            OptValue(1 * time.Second),
+			},
+			want: httpcache.FreshnessExpired,
+		},
+		{
+			name: `expired based on min-fresh`,
+			args: args{
+				currentAge:        5 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				minFresh:          OptValue(6 * time.Second),
+			},
+			want: httpcache.FreshnessExpired,
+		},
+		{
+			name: `expired after staleness period`,
+			args: args{
+				currentAge:        15 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				maxStale:          OptValue(4 * time.Second),
+			},
+			want: httpcache.FreshnessExpired,
+		},
+
+		{
+			name: `stale`,
+			args: args{
+				currentAge:        15 * time.Second,
+				freshnessLifetime: 10 * time.Second,
+				maxStale:          OptValue(5 * time.Second),
+			},
+			want: httpcache.FreshnessStale,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := httpcache.CalculateFreshness(tt.args.currentAge, tt.args.freshnessLifetime, tt.args.minFresh, tt.args.maxAge, tt.args.maxStale); got != tt.want {
+				t.Errorf("CalculateFreshness() = %v, want %v", got, tt.want)
 			}
 		})
 	}
