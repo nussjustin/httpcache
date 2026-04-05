@@ -379,6 +379,13 @@ type RequestDirectives struct {
 	Extensions []ExtensionDirective
 }
 
+var (
+	errDuplicateMaxAge   = errors.New("multiple values for directive max-age")
+	errDuplicateMaxStale = errors.New("multiple values for directive max-stale")
+	errDuplicateMinFresh = errors.New("multiple values for directive min-fresh")
+	errDuplicateSMaxAge  = errors.New("multiple values for directive s-maxage")
+)
+
 // ParseRequestDirectives parses a Cache-Control request header and returns a struct of the parsed directives.
 //
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
@@ -413,7 +420,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if c.MaxAge.Valid {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errors.New("multiple values for directive max-age"))
+				errs = append(errs, errDuplicateMaxAge)
 				break
 			}
 
@@ -435,7 +442,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if c.MaxStale.Valid {
 				c.MaxStale.Value, c.MaxStale.Valid = 0, true
 
-				errs = append(errs, errors.New("multiple values for directive max-stale"))
+				errs = append(errs, errDuplicateMaxStale)
 				break
 			}
 
@@ -457,7 +464,7 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			if c.MinFresh.Valid {
 				c.MinFresh.Value, c.MinFresh.Valid = math.MaxInt64, true
 
-				errs = append(errs, errors.New("multiple values for directive min-fresh"))
+				errs = append(errs, errDuplicateMinFresh)
 				break
 			}
 
@@ -628,7 +635,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			if c.MaxAge.Valid {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errors.New("multiple values for directive max-age"))
+				errs = append(errs, errDuplicateMaxAge)
 				break
 			}
 
@@ -678,7 +685,7 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			if c.SMaxAge.Valid {
 				c.SMaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errors.New("multiple values for directive s-maxage"))
+				errs = append(errs, errDuplicateSMaxAge)
 				break
 			}
 
@@ -767,6 +774,10 @@ type ResponseMetadata struct {
 	Vary []string
 }
 
+var (
+	errMissingDateHeader = errors.New("missing Date header")
+)
+
 // ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
 //
 // If the response has multiple Expires header values, the first one is used.
@@ -789,7 +800,7 @@ func ResponseMetadataFromResponse(resp *http.Response) (ResponseMetadata, error)
 			return ResponseMetadata{}, err
 		}
 	} else {
-		return ResponseMetadata{}, errors.New("missing Date header")
+		return ResponseMetadata{}, errMissingDateHeader
 	}
 
 	if ss := resp.Header["Expires"]; len(ss) != 0 {
