@@ -383,6 +383,11 @@ type RequestDirectives struct {
 //
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
+//
+// Multiple values for max-age or max-stale are considered an error and the corresponding value will be set to 0, which
+// will cause any response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
+//
+// Similarly, a duplicate value for min-fresh will cause the value to be set to the maximum duration.
 func ParseRequestDirectives(header string) (RequestDirectives, error) {
 	var c RequestDirectives
 	var errs []error
@@ -397,6 +402,19 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
+
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			if c.MaxAge.Valid {
+				c.MaxAge.Value, c.MaxAge.Valid = 0, true
+
+				errs = append(errs, errors.New("multiple values for directive max-age"))
+				break
+			}
+
 			c.MaxAge.Value, c.MaxAge.Valid = dur, true
 		case "max-stale":
 			dur, err := ParseAge(d.Value)
@@ -404,6 +422,19 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for max-stale: %w", err))
 				break
 			}
+
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			if c.MaxStale.Valid {
+				c.MaxStale.Value, c.MaxStale.Valid = 0, true
+
+				errs = append(errs, errors.New("multiple values for directive max-stale"))
+				break
+			}
+
 			c.MaxStale.Value, c.MaxStale.Valid = dur, true
 		case "min-fresh":
 			dur, err := ParseAge(d.Value)
@@ -411,6 +442,19 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for min-fresh: %w", err))
 				break
 			}
+
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			if c.MinFresh.Valid {
+				c.MinFresh.Value, c.MinFresh.Valid = math.MaxInt64, true
+
+				errs = append(errs, errors.New("multiple values for directive min-fresh"))
+				break
+			}
+
 			c.MinFresh.Value, c.MinFresh.Valid = dur, true
 		case "no-cache":
 			c.NoCache = true
@@ -550,6 +594,9 @@ type ResponseDirectives struct {
 //
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
+//
+// Multiple values for max-age or smax-age are considered an error and the corresponding value will be set to 0, which
+// will cause the response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 	var c ResponseDirectives
 	var errs []error
@@ -564,6 +611,19 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
+
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			if c.MaxAge.Valid {
+				c.MaxAge.Value, c.MaxAge.Valid = 0, true
+
+				errs = append(errs, errors.New("multiple values for directive max-age"))
+				break
+			}
+
 			c.MaxAge.Value, c.MaxAge.Valid = dur, true
 		case "must-revalidate":
 			c.MustRevalidate = true
@@ -599,6 +659,19 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 				errs = append(errs, fmt.Errorf("invalid value for s-maxage: %w", err))
 				break
 			}
+
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			if c.SMaxAge.Valid {
+				c.SMaxAge.Value, c.MaxAge.Valid = 0, true
+
+				errs = append(errs, errors.New("multiple values for directive s-maxage"))
+				break
+			}
+
 			c.SMaxAge.Value, c.SMaxAge.Valid = dur, true
 		default:
 			c.Extensions = append(c.Extensions, ExtensionDirective(d))
