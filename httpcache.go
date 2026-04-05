@@ -384,10 +384,10 @@ type RequestDirectives struct {
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Multiple values for max-age or max-stale are considered an error and the corresponding value will be set to 0, which
-// will cause any response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
+// Invalid or duplicate values for max-age or max-stale are considered an error and the corresponding value will be
+// set to 0, which will cause any response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 //
-// Similarly, a duplicate value for min-fresh will cause the value to be set to the maximum duration.
+// Similarly, an invalid or duplicate value for min-fresh will cause the value to be set to the maximum duration.
 func ParseRequestDirectives(header string) (RequestDirectives, error) {
 	var c RequestDirectives
 	var errs []error
@@ -399,6 +399,8 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 		case "max-age":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
+				c.MaxAge.Value, c.MaxAge.Valid = 0, true
+
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
@@ -419,6 +421,8 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 		case "max-stale":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
+				c.MaxStale.Value, c.MaxStale.Valid = 0, true
+
 				errs = append(errs, fmt.Errorf("invalid value for max-stale: %w", err))
 				break
 			}
@@ -439,6 +443,8 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 		case "min-fresh":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
+				c.MinFresh.Value, c.MinFresh.Valid = math.MaxInt64, true
+
 				errs = append(errs, fmt.Errorf("invalid value for min-fresh: %w", err))
 				break
 			}
@@ -595,8 +601,8 @@ type ResponseDirectives struct {
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Multiple values for max-age or smax-age are considered an error and the corresponding value will be set to 0, which
-// will cause the response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
+// Invalid or duplicate values for max-age or smax-age are considered an error and the corresponding value will be set
+// to 0, which will cause the response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 	var c ResponseDirectives
 	var errs []error
@@ -608,6 +614,8 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 		case "max-age":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
+				c.MaxAge.Value, c.MaxAge.Valid = 0, true
+
 				errs = append(errs, fmt.Errorf("invalid value for max-age: %w", err))
 				break
 			}
@@ -656,6 +664,8 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 		case "s-maxage":
 			dur, err := ParseAge(d.Value)
 			if err != nil {
+				c.SMaxAge.Value, c.SMaxAge.Valid = 0, true
+
 				errs = append(errs, fmt.Errorf("invalid value for s-maxage: %w", err))
 				break
 			}

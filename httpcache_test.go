@@ -911,6 +911,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid max-age`,
 			in:   `no-cache, max-age=test, no-store`,
 			want: httpcache.RequestDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -922,7 +923,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second max-age`,
 			in:   `no-cache, max-age=100, max-age=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MaxAge:  OptValue(100 * time.Second),
+				MaxAge:  OptValue(time.Duration(0)),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -934,8 +935,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid max-stale`,
 			in:   `no-cache, max-stale=test, no-store`,
 			want: httpcache.RequestDirectives{
-				NoCache: true,
-				NoStore: true,
+				MaxStale: OptValue(time.Duration(0)),
+				NoCache:  true,
+				NoStore:  true,
 			},
 			wantErr: []string{
 				"invalid value for max-stale: invalid value for delta-seconds",
@@ -945,7 +947,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second max-stale`,
 			in:   `no-cache, max-stale=200, max-stale=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MaxStale: OptValue(200 * time.Second),
+				MaxStale: OptValue(time.Duration(0)),
 				NoCache:  true,
 				NoStore:  true,
 			},
@@ -957,8 +959,9 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid min-fresh`,
 			in:   `no-cache, min-fresh=test, no-store`,
 			want: httpcache.RequestDirectives{
-				NoCache: true,
-				NoStore: true,
+				MinFresh: OptValue(time.Duration(math.MaxInt64)),
+				NoCache:  true,
+				NoStore:  true,
 			},
 			wantErr: []string{
 				"invalid value for min-fresh: invalid value for delta-seconds",
@@ -968,7 +971,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `invalid second min-fresh`,
 			in:   `no-cache, min-fresh=300, min-fresh=test, no-store`,
 			want: httpcache.RequestDirectives{
-				MinFresh: OptValue(300 * time.Second),
+				MinFresh: OptValue(time.Duration(math.MaxInt64)),
 				NoCache:  true,
 				NoStore:  true,
 			},
@@ -1275,6 +1278,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `invalid max-age`,
 			in:   `no-cache, max-age=test, no-store`,
 			want: httpcache.ResponseDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -1286,7 +1290,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `invalid second max-age`,
 			in:   `no-cache, max-age=100, max-age=test, no-store`,
 			want: httpcache.ResponseDirectives{
-				MaxAge:  OptValue(100 * time.Second),
+				MaxAge:  OptValue(time.Duration(0)),
 				NoCache: true,
 				NoStore: true,
 			},
@@ -1300,6 +1304,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			want: httpcache.ResponseDirectives{
 				NoCache: true,
 				NoStore: true,
+				SMaxAge: OptValue(time.Duration(0)),
 			},
 			wantErr: []string{
 				"invalid value for s-maxage: invalid value for delta-seconds",
@@ -1311,7 +1316,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			want: httpcache.ResponseDirectives{
 				NoCache: true,
 				NoStore: true,
-				SMaxAge: OptValue(200 * time.Second),
+				SMaxAge: OptValue(time.Duration(0)),
 			},
 			wantErr: []string{
 				"invalid value for s-maxage: invalid value for delta-seconds",
