@@ -902,9 +902,29 @@ func TestParseRequestDirectives(t *testing.T) {
 				},
 			},
 			wantErr: []string{
-				"multiple values for directive max-age",
-				"multiple values for directive max-stale",
-				"multiple values for directive min-fresh",
+				"conflicting values found for directive max-age",
+				"conflicting values found for directive max-stale",
+				"conflicting values found for directive min-fresh",
+			},
+		},
+		{
+			name: `duplicates with same max-/min- values`,
+			in: `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test", ` +
+				`max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test2"`,
+			want: httpcache.RequestDirectives{
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
+				NoCache:      true,
+				NoStore:      true,
+				NoTransform:  true,
+				OnlyIfCached: true,
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: "test2", HasValue: true},
+				},
 			},
 		},
 		{
@@ -1270,8 +1290,33 @@ func TestParseResponseDirectives(t *testing.T) {
 				},
 			},
 			wantErr: []string{
-				"multiple values for directive max-age",
-				"multiple values for directive s-maxage",
+				"conflicting values found for directive max-age",
+				"conflicting values found for directive s-maxage",
+			},
+		},
+		{
+			name: `duplicates duplicates with same max-/min- values`,
+			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
+				`max-age=100, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test2"`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:          OptValue(100 * time.Second),
+				MustRevalidate:  true,
+				MustUnderstand:  true,
+				NoCache:         true,
+				NoCacheHeaders:  []string{"Header-5", "Header-6"},
+				NoStore:         true,
+				NoTransform:     true,
+				Private:         true,
+				PrivateHeaders:  []string{"Header-7", "Header-8"},
+				ProxyRevalidate: true,
+				Public:          true,
+				SMaxAge:         OptValue(200 * time.Second),
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: "test", HasValue: true},
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: "test2", HasValue: true},
+				},
 			},
 		},
 		{

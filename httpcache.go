@@ -380,10 +380,10 @@ type RequestDirectives struct {
 }
 
 var (
-	errDuplicateMaxAge   = errors.New("multiple values for directive max-age")
-	errDuplicateMaxStale = errors.New("multiple values for directive max-stale")
-	errDuplicateMinFresh = errors.New("multiple values for directive min-fresh")
-	errDuplicateSMaxAge  = errors.New("multiple values for directive s-maxage")
+	errConflictingMaxAge   = errors.New("conflicting values found for directive max-age")
+	errConflictingMaxStale = errors.New("conflicting values found for directive max-stale")
+	errConflictingMinFresh = errors.New("conflicting values found for directive min-fresh")
+	errConflictingSMaxAge  = errors.New("conflicting values found for directive s-maxage")
 )
 
 // ParseRequestDirectives parses a Cache-Control request header and returns a struct of the parsed directives.
@@ -391,10 +391,10 @@ var (
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Invalid or duplicate values for max-age or max-stale are considered an error and the corresponding value will be
+// Invalid or conflicting values for max-age or max-stale are considered an error and the corresponding value will be
 // set to 0, which will cause any response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 //
-// Similarly, an invalid or duplicate value for min-fresh will cause the value to be set to the maximum duration.
+// Similarly, an invalid or conflicting value for min-fresh will cause the value to be set to the maximum duration.
 func ParseRequestDirectives(header string) (RequestDirectives, error) {
 	var c RequestDirectives
 	var errs []error
@@ -417,10 +417,10 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
 			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
 			// should be considered stale.
-			if c.MaxAge.Valid {
+			if c.MaxAge.Valid && c.MaxAge.Value != dur {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errDuplicateMaxAge)
+				errs = append(errs, errConflictingMaxAge)
 				break
 			}
 
@@ -439,10 +439,10 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
 			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
 			// should be considered stale.
-			if c.MaxStale.Valid {
+			if c.MaxStale.Valid && c.MaxStale.Value != dur {
 				c.MaxStale.Value, c.MaxStale.Valid = 0, true
 
-				errs = append(errs, errDuplicateMaxStale)
+				errs = append(errs, errConflictingMaxStale)
 				break
 			}
 
@@ -461,10 +461,10 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
 			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
 			// should be considered stale.
-			if c.MinFresh.Valid {
+			if c.MinFresh.Valid && c.MinFresh.Value != dur {
 				c.MinFresh.Value, c.MinFresh.Valid = math.MaxInt64, true
 
-				errs = append(errs, errDuplicateMinFresh)
+				errs = append(errs, errConflictingMinFresh)
 				break
 			}
 
@@ -608,7 +608,7 @@ type ResponseDirectives struct {
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Invalid or duplicate values for max-age or smax-age are considered an error and the corresponding value will be set
+// Invalid or conflicting values for max-age or smax-age are considered an error and the corresponding value will be set
 // to 0, which will cause the response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 	var c ResponseDirectives
@@ -632,10 +632,10 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
 			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
 			// should be considered stale.
-			if c.MaxAge.Valid {
+			if c.MaxAge.Valid && c.MaxAge.Value != dur {
 				c.MaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errDuplicateMaxAge)
+				errs = append(errs, errConflictingMaxAge)
 				break
 			}
 
@@ -682,10 +682,10 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
 			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
 			// should be considered stale.
-			if c.SMaxAge.Valid {
+			if c.SMaxAge.Valid && c.SMaxAge.Value != dur {
 				c.SMaxAge.Value, c.MaxAge.Valid = 0, true
 
-				errs = append(errs, errDuplicateSMaxAge)
+				errs = append(errs, errConflictingSMaxAge)
 				break
 			}
 
