@@ -808,6 +808,52 @@ func TestParseAge(t *testing.T) {
 	}
 }
 
+func TestParseExpires(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    time.Time
+		wantErr bool
+	}{
+		{
+			name:    `empty`,
+			wantErr: true,
+		},
+		{
+			name: `correct case`,
+			in:   `Mon, 02 Jan 2006 15:04:05 GMT`,
+			want: time.Date(2006, time.January, 02, 15, 04, 05, 0, time.UTC),
+		},
+		{
+			name: `wrong case`,
+			in:   `mON, 02 Jan 2006 15:04:05 gmt`,
+			want: time.Date(2006, time.January, 02, 15, 04, 05, 0, time.UTC),
+		},
+		{
+			name:    `invalid day`,
+			in:      `Mo, 02 Jan 2006 15:04:05 GMT`,
+			wantErr: true,
+		},
+		{
+			name:    `invalid timezone`,
+			in:      `Mon, 02 Jan 2006 15:04:05 UTC`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseExpires(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseExpires() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseExpires() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func OptValue[T any](t T) httpcache.Opt[T] {
 	return httpcache.Opt[T]{Value: t, Valid: true}
 }
@@ -1680,6 +1726,29 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 							"Mon, 02 Jan 2006 15:04:05 GMT",
 							"Mon, 03 Jan 2006 15:04:05 GMT",
 						},
+					},
+					StatusCode: http.StatusOK,
+				},
+				at: now,
+			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Time:       now,
+			},
+		},
+		// From https://www.rfc-editor.org/rfc/rfc9111#name-freshness
+		//
+		// Although all date formats are specified to be case-sensitive, a cache recipient SHOULD match the field
+		// value case-insensitively.
+		{
+			name: `case ignored for expires`,
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Expires": []string{"MON, 02 Jan 2006 15:04:05 gmt"},
 					},
 					StatusCode: http.StatusOK,
 				},
