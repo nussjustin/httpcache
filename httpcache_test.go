@@ -808,6 +808,115 @@ func TestParseAge(t *testing.T) {
 	}
 }
 
+func TestParseETags(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    []httpcache.ETag
+		wantErr bool
+	}{
+		{
+			name: `empty`,
+		},
+		{
+			name: `strong`,
+			in:   `"strong"`,
+			want: []httpcache.ETag{
+				{Tag: "strong"},
+			},
+		},
+		{
+			name: `weak`,
+			in:   `W/"weak"`,
+			want: []httpcache.ETag{
+				{Tag: "weak", Weak: true},
+			},
+		},
+		{
+			name:    `weak with lower case W`,
+			in:      `w/"weak"`,
+			wantErr: true,
+		},
+		{
+			name: `multiple`,
+			in:   `"strong 1" , W/"weak 1", "strong 2" , W/"weak 2"`,
+			want: []httpcache.ETag{
+				{Tag: "strong 1"},
+				{Tag: "weak 1", Weak: true},
+				{Tag: "strong 2"},
+				{Tag: "weak 2", Weak: true},
+			},
+		},
+		{
+			name:    `missing quotes, string`,
+			in:      `strong`,
+			wantErr: true,
+		},
+		{
+			name:    `missing quotes, weak`,
+			in:      `W/strong`,
+			wantErr: true,
+		},
+		{
+			name:    `missing opening quote`,
+			in:      `"strong 1" , strong 2"`,
+			wantErr: true,
+		},
+		{
+			name:    `missing closing quote`,
+			in:      `"strong 1" , "strong 2`,
+			wantErr: true,
+		},
+		{
+			name:    `text after closing quote`,
+			in:      `"strong 1" , "strong 2" after`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseETags(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseETags() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseETags() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestETag_String(t *testing.T) {
+	tests := []struct {
+		name string
+		etag httpcache.ETag
+		want string
+	}{
+		{
+			name: "empty",
+			want: `""`,
+		},
+		{
+			name: "strong",
+			etag: httpcache.ETag{Tag: "strong"},
+			want: `"strong"`,
+		},
+		{
+			name: "weak",
+			etag: httpcache.ETag{Tag: "weak", Weak: true},
+			want: `W/"weak"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.etag.String(); got != tt.want {
+				t.Errorf("ETag.String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseExpires(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1229,6 +1338,292 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: `with if-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Match": []string{`"strong", W/"weak"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with multiple if-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Match": []string{`"strong", W/"weak"`, `"strong 2", W/"weak 2"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+						{Tag: "strong 2"},
+						{Tag: "weak 2", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with if-match asterisk`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Match": []string{`"strong", W/"weak"`, `*`, `"strong 2", W/"weak 2"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					Asterisk: true,
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+						{Tag: "strong 2"},
+						{Tag: "weak 2", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with invalid if-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Match": []string{`invalid`},
+					},
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
+			name: `with if-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Modified-Since": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method:          http.MethodGet,
+				IfModifiedSince: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Time:            now,
+			},
+		},
+		{
+			name: `with invalid if-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Modified-Since": []string{"Mon, 02 Jan 2006 15:04:05 UTC"},
+					},
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
+			name: `with multiple if-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Modified-Since": []string{
+							"Mon, 02 Jan 2006 15:04:05 GMT",
+							"Mon, 03 Jan 2006 15:04:05 GMT",
+						},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method:          http.MethodGet,
+				IfModifiedSince: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Time:            now,
+			},
+		},
+		{
+			name: `with if-none-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-None-Match": []string{`"strong", W/"weak"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfNoneMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with multiple if-none-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-None-Match": []string{`"strong", W/"weak"`, `"strong 2", W/"weak 2"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfNoneMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+						{Tag: "strong 2"},
+						{Tag: "weak 2", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with if-none-match asterisk`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-None-Match": []string{`"strong", W/"weak"`, `*`, `"strong 2", W/"weak 2"`},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				IfNoneMatch: struct {
+					Asterisk bool
+					ETags    []httpcache.ETag
+				}{
+					Asterisk: true,
+					ETags: []httpcache.ETag{
+						{Tag: "strong"},
+						{Tag: "weak", Weak: true},
+						{Tag: "strong 2"},
+						{Tag: "weak 2", Weak: true},
+					},
+				},
+				Time: now,
+			},
+		},
+		{
+			name: `with invalid if-none-match`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-None-Match": []string{`invalid`},
+					},
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
+			name: `with if-not-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Not-Modified-Since": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method:             http.MethodGet,
+				IfNotModifiedSince: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Time:               now,
+			},
+		},
+		{
+			name: `with invalid if-not-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Not-Modified-Since": []string{"Mon, 02 Jan 2006 15:04:05 UTC"},
+					},
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
+			name: `with multiple if-not-modified-since`,
+			args: args{
+				req: http.Request{
+					Method: http.MethodGet,
+					Header: http.Header{
+						"If-Not-Modified-Since": []string{
+							"Mon, 02 Jan 2006 15:04:05 GMT",
+							"Mon, 03 Jan 2006 15:04:05 GMT",
+						},
+					},
+				},
+				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method:             http.MethodGet,
+				IfNotModifiedSince: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Time:               now,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1614,35 +2009,12 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 			args: args{
 				resp: http.Response{
 					Header: http.Header{
-						"Cache-Control": []string{"max-age=5"},
-						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-						"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
-						"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(5 * time.Second),
-				},
-				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
-			},
-		},
-		{
-			name: `full response with Age header`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
 						"Age":           []string{"3"},
 						"Cache-Control": []string{"max-age=5"},
 						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Etag":          []string{"tag", "tag2", `W/"tag3"`},
 						"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
+						"Last-Modified": []string{"Mon, 04 Jan 2006 15:04:05 GMT"},
 						"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
 					},
 					StatusCode: http.StatusOK,
@@ -1655,10 +2027,12 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				Directives: httpcache.ResponseDirectives{
 					MaxAge: OptValue(5 * time.Second),
 				},
-				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
+				ETags:        []string{"tag", "tag2", `W/"tag3"`},
+				Expires:      time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
+				LastModified: time.Date(2006, time.January, 4, 15, 04, 05, 0, time.UTC),
+				StatusCode:   http.StatusOK,
+				Time:         now,
+				Vary:         []string{"*", "Header-1", "Header-2", "Header-3"},
 			},
 		},
 		{
@@ -1759,6 +2133,42 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
 				StatusCode: http.StatusOK,
 				Time:       now,
+			},
+		},
+		{
+			name: `invalid last-modified`,
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Last-Modified": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
+					},
+					StatusCode: http.StatusOK,
+				},
+				at: now,
+			},
+			wantErr: true,
+		},
+		{
+			name: `multiple last-modified`,
+			args: args{
+				resp: http.Response{
+					Header: http.Header{
+						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
+						"Last-Modified": []string{
+							"Mon, 02 Jan 2006 15:04:05 GMT",
+							"Mon, 03 Jan 2006 15:04:05 GMT",
+						},
+					},
+					StatusCode: http.StatusOK,
+				},
+				at: now,
+			},
+			want: httpcache.ResponseMetadata{
+				Date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				LastModified: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode:   http.StatusOK,
+				Time:         now,
 			},
 		},
 	}
