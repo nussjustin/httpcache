@@ -656,18 +656,24 @@ type RequestMetadata struct {
 }
 
 // RequestMetadataFromRequest builds a RequestMetadata object from an actual HTTP request.
+//
+// If the request has multiple If-Modified-Since or If-Not-Modified-Since header lines, the first one is used.
+//
+// The function will try to parse as much as it can and will return the potentially partial result together with any
+// errors, joined using [errors.Join].
 func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadata, error) {
-	// TODO: Return partial values
-	dir, err := ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
-	if err != nil {
-		return RequestMetadata{}, err
-	}
+	var errs []error
+	var err error
 
 	d := RequestMetadata{
 		Authorized: len(req.Header["Authorization"]) != 0,
 		Method:     req.Method,
-		Directives: dir,
 		Time:       at,
+	}
+
+	d.Directives, err = ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	for _, s := range req.Header["If-Match"] {
@@ -678,7 +684,7 @@ func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadat
 
 		etags, err := ParseETags(s)
 		if err != nil {
-			return RequestMetadata{}, err
+			errs = append(errs, err)
 		}
 
 		if d.IfMatch.ETags == nil {
@@ -690,7 +696,7 @@ func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadat
 
 	if ss := req.Header["If-Modified-Since"]; len(ss) != 0 {
 		if d.IfModifiedSince, err = ParseExpires(ss[0]); err != nil {
-			return RequestMetadata{}, err
+			errs = append(errs, err)
 		}
 	}
 
@@ -702,7 +708,7 @@ func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadat
 
 		etags, err := ParseETags(s)
 		if err != nil {
-			return RequestMetadata{}, err
+			errs = append(errs, err)
 		}
 
 		if d.IfNoneMatch.ETags == nil {
@@ -714,11 +720,11 @@ func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadat
 
 	if ss := req.Header["If-Not-Modified-Since"]; len(ss) != 0 {
 		if d.IfNotModifiedSince, err = ParseExpires(ss[0]); err != nil {
-			return RequestMetadata{}, err
+			errs = append(errs, err)
 		}
 	}
 
-	return d, nil
+	return d, errors.Join(errs...)
 }
 
 // ResponseDirectives contains parsed cache directives from a Cache-Control header for a response.
@@ -967,38 +973,40 @@ var (
 
 // ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
 //
-// If the response has multiple Expires header values, the first one is used.
+// If the response has multiple Expires or Last-Modified header lines, the first one is used.
 //
-// If the Age header is set, it is parsed and used for the Age field.
+// The function will try to parse as much as it can and will return the potentially partial result together with any
+// errors, joined using [errors.Join].
 func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMetadata, error) {
-	// TODO: Return partial values
-	dir, err := ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
-	if err != nil {
-		return ResponseMetadata{}, err
-	}
+	var errs []error
+	var err error
 
 	d := ResponseMetadata{
 		StatusCode: resp.StatusCode,
-		Directives: dir,
 		ETags:      resp.Header["Etag"],
 		Time:       at,
 		Vary:       NormalizeVaryHeader(resp.Header["Vary"]),
 	}
 
+	d.Directives, err = ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
+	if err != nil {
+		errs = append(errs, err)
+	}
+
 	if ss := resp.Header["Age"]; len(ss) != 0 {
 		age, err := ParseAge(strings.Join(ss, ", "))
 		if err != nil {
-			return ResponseMetadata{}, err
+			errs = append(errs, err)
 		}
-		d.Age.Value, d.Age.Valid = age, true
+		d.Age.Value, d.Age.Valid = age, err == nil
 	}
 
 	if ss := resp.Header["Date"]; len(ss) != 0 {
 		if d.Date, err = http.ParseTime(strings.Join(ss, ", ")); err != nil {
-			return ResponseMetadata{}, err
+			errs = append(errs, err)
 		}
 	} else {
-		return ResponseMetadata{}, errMissingDateHeader
+		errs = append(errs, errMissingDateHeader)
 	}
 
 	if ss := resp.Header["Expires"]; len(ss) != 0 {
@@ -1009,17 +1017,17 @@ func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMe
 		// should be considered stale.
 
 		if d.Expires, err = ParseExpires(ss[0]); err != nil {
-			return ResponseMetadata{}, err
+			errs = append(errs, err)
 		}
 	}
 
 	if ss := resp.Header["Last-Modified"]; len(ss) != 0 {
 		if d.LastModified, err = ParseExpires(ss[0]); err != nil {
-			return ResponseMetadata{}, err
+			errs = append(errs, err)
 		}
 	}
 
-	return d, nil
+	return d, errors.Join(errs...)
 }
 
 // FreshnessLifetime returns the time the response is considered to be fresh, as defined in RFC 9111, Section 4.2.

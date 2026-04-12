@@ -1336,6 +1336,14 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.RequestMetadata{
+				Directives: httpcache.RequestDirectives{
+					MaxAge:  OptValue(0 * time.Second),
+					NoCache: true,
+				},
+				Method: http.MethodGet,
+				Time:   now,
+			},
 			wantErr: true,
 		},
 		{
@@ -1429,6 +1437,10 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				Time:   now,
+			},
 			wantErr: true,
 		},
 		{
@@ -1458,6 +1470,10 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 					},
 				},
 				at: now,
+			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				Time:   now,
 			},
 			wantErr: true,
 		},
@@ -1572,6 +1588,10 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				Time:   now,
+			},
 			wantErr: true,
 		},
 		{
@@ -1602,6 +1622,10 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.RequestMetadata{
+				Method: http.MethodGet,
+				Time:   now,
+			},
 			wantErr: true,
 		},
 		{
@@ -1631,7 +1655,6 @@ func TestRequestMetadataFromRequest(t *testing.T) {
 			got, err := httpcache.RequestMetadataFromRequest(&tt.args.req, tt.args.at)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("RequestMetadataFromRequest() error = %v, wantErr %v", err, tt.wantErr)
-				return
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("RequestMetadataFromRequest() mismatch (-want +got):\n%s", diff)
@@ -2047,6 +2070,11 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Time:       now,
+			},
 			wantErr: true,
 		},
 		{
@@ -2054,12 +2082,21 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 			args: args{
 				resp: http.Response{
 					Header: http.Header{
-						"Cache-Control": []string{"max-age=test"},
+						"Cache-Control": []string{"max-age=test, no-cache"},
 						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
 					},
 					StatusCode: http.StatusOK,
 				},
 				at: now,
+			},
+			want: httpcache.ResponseMetadata{
+				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				Directives: httpcache.ResponseDirectives{
+					MaxAge:  OptValue(0 * time.Second),
+					NoCache: true,
+				},
+				StatusCode: http.StatusOK,
+				Time:       now,
 			},
 			wantErr: true,
 		},
@@ -2074,6 +2111,10 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.ResponseMetadata{
+				StatusCode: http.StatusOK,
+				Time:       now,
+			},
 			wantErr: true,
 		},
 		{
@@ -2087,6 +2128,11 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 					StatusCode: http.StatusOK,
 				},
 				at: now,
+			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Time:       now,
 			},
 			wantErr: true,
 		},
@@ -2147,6 +2193,11 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 				},
 				at: now,
 			},
+			want: httpcache.ResponseMetadata{
+				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				StatusCode: http.StatusOK,
+				Time:       now,
+			},
 			wantErr: true,
 		},
 		{
@@ -2178,7 +2229,6 @@ func TestResponseMetadataFromResponse(t *testing.T) {
 			got, err := httpcache.ResponseMetadataFromResponse(&tt.args.resp, tt.args.at)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ResponseMetadataFromResponse() error = %v, wantErr %v", err, tt.wantErr)
-				return
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("ResponseMetadataFromResponse() mismatch (-want +got):\n%s", diff)
