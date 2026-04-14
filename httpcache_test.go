@@ -1,6 +1,7 @@
 package httpcache_test
 
 import (
+	"encoding/hex"
 	"maps"
 	"math"
 	"net/http"
@@ -701,51 +702,6 @@ func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 	}
 }
 
-func TestNormalizeVaryHeader(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []string
-		want []string
-	}{
-		{
-			name: `no values`,
-		},
-		{
-			name: `empty slice`,
-			in:   []string{},
-		},
-		{
-			name: `single header`,
-			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 "},
-			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `single header with duplicates`,
-			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 , Header-1, Header-3"},
-			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `multiple headers`,
-			in:   []string{" header-3, HEADER-1", "Header-2 , HeAdEr-4"},
-			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `multiple headers with duplicates`,
-			in:   []string{" header-3, HEADER-1 ,Header-2", "HeAdEr-4 , Header-1, Header-3"},
-			want: []string{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := httpcache.NormalizeVaryHeader(tt.in)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Vary() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseAge(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -849,6 +805,181 @@ func TestParseExpires(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ParseExpires() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseVary(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want httpcache.Vary
+	}{
+		{
+			name: `no values`,
+		},
+		{
+			name: `empty slice`,
+			in:   []string{},
+		},
+		{
+			name: `single header`,
+			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 "},
+			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
+		},
+		{
+			name: `single header with duplicates`,
+			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 , Header-1, Header-3"},
+			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
+		},
+		{
+			name: `multiple headers`,
+			in:   []string{" header-3, HEADER-1", "Header-2 , HeAdEr-4"},
+			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
+		},
+		{
+			name: `multiple headers with duplicates`,
+			in:   []string{" header-3, HEADER-1 ,Header-2", "HeAdEr-4 , Header-1, Header-3"},
+			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := httpcache.ParseVary(tt.in)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Response.Vary() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVary_Key(t *testing.T) {
+	type args struct {
+		vary   httpcache.Vary
+		header http.Header
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantNil bool
+	}{
+		{
+			name:    `empty`,
+			wantNil: true,
+		},
+		{
+			name: `existing header`,
+			args: args{
+				vary: httpcache.Vary{"Header-1", "Header-2"},
+				header: http.Header{
+					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
+					"Header-2": {"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+				},
+			},
+			want: `1775c79cde57a75e2fc3bd35b7e58a74c214dabb`,
+		},
+		{
+			name: `non-existing header`,
+			args: args{
+				vary: httpcache.Vary{"Header-1", "Header-2"},
+				header: http.Header{
+					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+				},
+			},
+			want: `b071dc8a0b2b5f8aa80e371a7e446c4b8586f011`,
+		},
+		{
+			name: `mix of existing and non-existing headers`,
+			args: args{
+				vary: httpcache.Vary{"Header-1", "Header-2"},
+				header: http.Header{
+					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
+					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+				},
+			},
+			want: `4d7b2c07922f0a25128d08de082c1a146956bbe5`,
+		},
+		{
+			name: `mix of existing and empty headers`,
+			args: args{
+				vary: httpcache.Vary{"Header-1", "Header-2"},
+				header: http.Header{
+					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
+					"Header-2": {""},
+					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+				},
+			},
+			want: `f054b248f9fbf25a9712d9e3dfeb84f087bcff18`,
+		},
+		{
+			name: `wildcard`,
+			args: args{
+				vary: httpcache.Vary{"*"},
+			},
+			wantNil: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.args.vary.Key(nil, tt.args.header)
+			if (got == nil) != tt.wantNil {
+				t.Errorf("Vary.Key() got = %x, want nil", string(got))
+			}
+			encoded := hex.EncodeToString(got)
+			if encoded != tt.want {
+				t.Errorf("Vary.Key() got = %v, want %v", encoded, tt.want)
+			}
+		})
+	}
+}
+
+func TestVary_Wildcard(t *testing.T) {
+	tests := []struct {
+		name string
+		in   httpcache.Vary
+		want bool
+	}{
+		{
+			name: `empty`,
+		},
+		{
+			name: `single non-wildcard`,
+			in:   httpcache.Vary{"Header-1"},
+		},
+		{
+			name: `multiple non-wildcards`,
+			in:   httpcache.Vary{"Header-1", "Header-2", "Header-3"},
+		},
+		{
+			name: `single wildcard`,
+			in:   httpcache.Vary{"*"},
+			want: true,
+		},
+		{
+			name: `multiple wildcards`,
+			in:   httpcache.Vary{"*", "*", "*"},
+			want: true,
+		},
+		{
+			name: `mixed`,
+			in:   httpcache.Vary{"Header-1", "*", "Header-2"},
+			want: true,
+		},
+		{
+			name: `asterisk in header`,
+			in:   httpcache.Vary{"Header-*-Name"},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.in.Wildcard()
+			if got != tt.want {
+				t.Errorf("Vary.Wildcard() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -2,10 +2,11 @@
 package httpcache
 
 import (
+	"crypto/sha1"
+	"encoding/binary"
 	"errors"
 	"math"
 	"net/http"
-	"net/textproto"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,8 +46,8 @@ type Config struct {
 	// Private configures the cache to be private, as understood by RFC 9111.
 	Private bool
 
-	// RespectPrivateHeaders can be set to true to enable caches to be stored even when private is specified in the
-	// response, as long as the private directive has specified at least one header in its value.
+	// RespectPrivateHeaders can be set to true to allow storing restores even when the private directive is specified,
+	// as long as the private directive has specified at least one header in its value.
 	//
 	// It also causes [Config.RemoveUnstorableHeaders] to remove headers specified for the "private" response directive,
 	// but not for the "no-cache" directive (as those are still usable depending on the request).
@@ -230,45 +231,6 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 	}
 }
 
-// NormalizeVaryHeader returns the parsed header names from the Vary header.
-//
-// Duplicates are removed and the result is sorted.
-func NormalizeVaryHeader(values []string) []string {
-	var headers []string
-
-	for _, vary := range values {
-		for header := range strings.SplitSeq(vary, ",") {
-			header = strings.TrimSpace(header)
-			header = textproto.CanonicalMIMEHeaderKey(header)
-
-			headers = append(headers, header)
-		}
-	}
-
-	if len(headers) == 0 {
-		return nil
-	}
-
-	slices.Sort(headers)
-
-	last := 0
-
-	for i := range len(headers) {
-		if headers[i] == headers[last] {
-			continue
-		}
-
-		headers[last+1] = headers[i]
-		last++
-	}
-
-	sorted := headers[: last+1 : last+1]
-
-	clear(headers[len(sorted):])
-
-	return sorted
-}
-
 // ParseAge parses a duration in seconds e.g. from the HTTP Age header or the max-/min-* Cache-Control directives.
 func ParseAge(s string) (time.Duration, error) {
 	d, err := parseDeltaSeconds(s)
@@ -345,6 +307,86 @@ func isLower(b byte) bool {
 
 func isUpper(b byte) bool {
 	return b >= 'A' && b <= 'Z'
+}
+
+// Vary contains a sorted list of unique header names, used to vary responses.
+//
+// Each header is canonicalized using [http.CanonicalHeaderKey].
+type Vary []string
+
+// ParseVary parses the given "Vary" response header lines.
+//
+// See [Vary] for more information.
+func ParseVary(lines []string) Vary {
+	var headers []string
+
+	for _, line := range lines {
+		for header := range strings.SplitSeq(line, ",") {
+			header = strings.TrimSpace(header)
+			header = http.CanonicalHeaderKey(header)
+
+			headers = append(headers, header)
+		}
+	}
+
+	if len(headers) == 0 {
+		return nil
+	}
+
+	slices.Sort(headers)
+
+	last := 0
+
+	for i := range len(headers) {
+		if headers[i] == headers[last] {
+			continue
+		}
+
+		headers[last+1] = headers[i]
+		last++
+	}
+
+	sorted := headers[: last+1 : last+1]
+
+	clear(headers[len(sorted):])
+
+	return sorted
+}
+
+// Key calculates a unique key for the headers from v using the given header map and appends it to dst.
+//
+// If v is empty or contains a wildcard, nil is returned and dst is not changed.
+//
+// The header values are not normalized in any way (e.g. stripping spaces or merging header lines).
+func (v Vary) Key(dst []byte, header http.Header) []byte {
+	if len(v) == 0 || v.Wildcard() {
+		return nil
+	}
+
+	h := sha1.New()
+
+	dst = slices.Grow(dst, h.Size())
+
+	for _, name := range v {
+		h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(name))))
+		h.Write([]byte(name))
+
+		values := header[name]
+
+		h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(values))))
+
+		for _, value := range header[name] {
+			h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(value))))
+			h.Write([]byte(value))
+		}
+	}
+
+	return h.Sum(dst)
+}
+
+// Wildcard returns true if v contains the wildcard value "*".
+func (v Vary) Wildcard() bool {
+	return slices.Contains(v, "*")
 }
 
 // ExtensionDirective represents a non-standard Cache-Control directive.
@@ -821,9 +863,7 @@ type ResponseMetadata struct {
 	Time time.Time
 
 	// Vary contains a normalized list of headers to vary the response by.
-	//
-	// See [NormalizeVaryHeader] for more information.
-	Vary []string
+	Vary Vary
 }
 
 var (
@@ -843,7 +883,7 @@ func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMe
 	d := ResponseMetadata{
 		StatusCode: resp.StatusCode,
 		Time:       at,
-		Vary:       NormalizeVaryHeader(resp.Header["Vary"]),
+		Vary:       ParseVary(resp.Header["Vary"]),
 	}
 
 	d.Directives, err = ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
