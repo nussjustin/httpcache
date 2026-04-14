@@ -318,67 +318,6 @@ func parseDeltaSeconds(s string) (uint64, error) {
 	return d, nil
 }
 
-// ETag represents a single entity tag as used in the ETag, If-Match and If-None-Match headers.
-type ETag struct {
-	// Tag contains the unquoted tag.
-	Tag string
-
-	// Weak is true for "weak" tags (those prefixed with W/).
-	Weak bool
-}
-
-var (
-	errMissingETagOpeningQuote      = errors.New("missing opening quote for etag")
-	errMissingETagClosingQuote      = errors.New("missing closing quote for etag")
-	errUnexpectedCharacterAfterETag = errors.New("unexpected character after etag")
-)
-
-// ParseETags parses a comma-separated list of ETags.
-func ParseETags(s string) ([]ETag, error) {
-	var etags []ETag
-
-	for s = strings.TrimSpace(s); s != ""; s = strings.TrimSpace(s) {
-		var weak bool
-
-		if strings.HasPrefix(s, "W/") {
-			weak = true
-			s = s[2:]
-		}
-
-		if !strings.HasPrefix(s, `"`) {
-			return nil, errMissingETagOpeningQuote
-		}
-
-		end := strings.IndexByte(s[1:], '"') + 1
-
-		if end == 0 {
-			return nil, errMissingETagClosingQuote
-		}
-
-		etags = append(etags, ETag{s[1:end], weak})
-
-		s = strings.TrimSpace(s[end+1:])
-
-		if s != "" && s[0] != ',' {
-			return nil, errUnexpectedCharacterAfterETag
-		}
-
-		if s != "" {
-			s = s[1:]
-		}
-	}
-
-	return etags, nil
-}
-
-// String returns the quoted entity tag, optionally with "W/" prefix when the tag is weak.
-func (e ETag) String() string {
-	if e.Weak {
-		return `W/"` + e.Tag + `"`
-	}
-	return `"` + e.Tag + `"`
-}
-
 // ParseExpires parses an Expires header value into a Go time.Time.
 //
 // This is the same as [http.ParseTime] except that it is case-insensitive.
@@ -627,37 +566,11 @@ type RequestMetadata struct {
 	// Directives contains the parsed Cache-Control directives.
 	Directives RequestDirectives
 
-	// IfMatch contains the parsed If-Match header.
-	IfMatch struct {
-		// Asterisk is true when the header was "*".
-		Asterisk bool
-
-		// ETags contains the unquoted entity tags that must match.
-		ETags []ETag
-	}
-
-	// IfModifiedSince contains the parsed If-Modified-Since header, if given.
-	IfModifiedSince time.Time
-
-	// IfNoneMatch contains the parsed If-None-Match header.
-	IfNoneMatch struct {
-		// Asterisk is true when the header was "*".
-		Asterisk bool
-
-		// ETags contains the unquoted entity tags that must not match.
-		ETags []ETag
-	}
-
-	// IfNotModifiedSince contains the parsed If-Not-Modified-Since header, if given.
-	IfNotModifiedSince time.Time
-
 	// Time contains the time at which the request was sent.
 	Time time.Time
 }
 
 // RequestMetadataFromRequest builds a RequestMetadata object from an actual HTTP request.
-//
-// If the request has multiple If-Modified-Since or If-Not-Modified-Since header lines, the first one is used.
 //
 // The function will try to parse as much as it can and will return the potentially partial result together with any
 // errors, joined using [errors.Join].
@@ -674,54 +587,6 @@ func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadat
 	d.Directives, err = ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
 	if err != nil {
 		errs = append(errs, err)
-	}
-
-	for _, s := range req.Header["If-Match"] {
-		if s == "*" {
-			d.IfMatch.Asterisk = true
-			continue
-		}
-
-		etags, err := ParseETags(s)
-		if err != nil {
-			errs = append(errs, err)
-		}
-
-		if d.IfMatch.ETags == nil {
-			d.IfMatch.ETags = etags
-		} else {
-			d.IfMatch.ETags = append(d.IfMatch.ETags, etags...)
-		}
-	}
-
-	if ss := req.Header["If-Modified-Since"]; len(ss) != 0 {
-		if d.IfModifiedSince, err = ParseExpires(ss[0]); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	for _, s := range req.Header["If-None-Match"] {
-		if s == "*" {
-			d.IfNoneMatch.Asterisk = true
-			continue
-		}
-
-		etags, err := ParseETags(s)
-		if err != nil {
-			errs = append(errs, err)
-		}
-
-		if d.IfNoneMatch.ETags == nil {
-			d.IfNoneMatch.ETags = etags
-		} else {
-			d.IfNoneMatch.ETags = append(d.IfNoneMatch.ETags, etags...)
-		}
-	}
-
-	if ss := req.Header["If-Not-Modified-Since"]; len(ss) != 0 {
-		if d.IfNotModifiedSince, err = ParseExpires(ss[0]); err != nil {
-			errs = append(errs, err)
-		}
 	}
 
 	return d, errors.Join(errs...)
@@ -946,14 +811,8 @@ type ResponseMetadata struct {
 	// Directives contains the parsed Cache-Control directives.
 	Directives ResponseDirectives
 
-	// ETags contains the values of the ETag response headers.
-	ETags []string
-
 	// Expires contains the parsed Expires header, if given.
 	Expires time.Time
-
-	// LastModified contains the parsed Last-Modified header, if given.
-	LastModified time.Time
 
 	// StatusCode is the final HTTP response code used for the response.
 	StatusCode int
@@ -973,7 +832,7 @@ var (
 
 // ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
 //
-// If the response has multiple Expires or Last-Modified header lines, the first one is used.
+// If the response has multiple Expires header lines, the first one is used.
 //
 // The function will try to parse as much as it can and will return the potentially partial result together with any
 // errors, joined using [errors.Join].
@@ -983,7 +842,6 @@ func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMe
 
 	d := ResponseMetadata{
 		StatusCode: resp.StatusCode,
-		ETags:      resp.Header["Etag"],
 		Time:       at,
 		Vary:       NormalizeVaryHeader(resp.Header["Vary"]),
 	}
@@ -1017,12 +875,6 @@ func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMe
 		// should be considered stale.
 
 		if d.Expires, err = ParseExpires(ss[0]); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if ss := resp.Header["Last-Modified"]; len(ss) != 0 {
-		if d.LastModified, err = ParseExpires(ss[0]); err != nil {
 			errs = append(errs, err)
 		}
 	}
