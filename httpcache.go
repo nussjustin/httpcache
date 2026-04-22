@@ -29,13 +29,11 @@ type Config struct {
 	// If nil, such responses are not cached.
 	CanUnderstandResponseCode func(code int) bool
 
-	// IgnoreRequestDirectiveNoStore can be set to disable checking of the no-store Cache-Control request directive.
+	// RespectRequestDirectiveNoStore can be set to enable checking of the no-store Cache-Control request directive.
 	//
 	// Note that while RFC 9111 specifies that the no-store directive should prevent responses from being cached, the
 	// steps for determining whether a response can be stored do not actually say anything about the directive.
-	//
-	// The [Config.CanStore] method by default respects the directive, but caches may want to ignore it.
-	IgnoreRequestDirectiveNoStore bool
+	RespectRequestDirectiveNoStore bool
 
 	// IsHeuristicallyCacheableStatusCode is called to check if a status code can be cached without explicit opt-in via
 	// cache directives.
@@ -146,7 +144,7 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 		return false
 	}
 
-	if !c.IgnoreRequestDirectiveNoStore {
+	if c.RespectRequestDirectiveNoStore {
 		// Note: This is not actually part of "3. Storing Responses in Caches".
 		if req.Directives.NoStore {
 			return false

@@ -556,12 +556,12 @@ func TestConfig_CanStore(t *testing.T) {
 				Method: "GET",
 			},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
-			wantPublic:  false,
-			wantPrivate: false,
+			wantPublic:  true,
+			wantPrivate: true,
 		},
 		{
-			name:   `request no-store, IgnoreRequestDirectiveNoStore set`,
-			config: httpcache.Config{IgnoreRequestDirectiveNoStore: true},
+			name:   `request no-store, RespectRequestDirectiveNoStore set`,
+			config: httpcache.Config{RespectRequestDirectiveNoStore: true},
 			req: httpcache.RequestMetadata{
 				Directives: httpcache.RequestDirectives{
 					NoStore: true,
@@ -569,8 +569,8 @@ func TestConfig_CanStore(t *testing.T) {
 				Method: "GET",
 			},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
-			wantPublic:  true,
-			wantPrivate: true,
+			wantPublic:  false,
+			wantPrivate: false,
 		},
 	}
 
