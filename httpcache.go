@@ -997,9 +997,11 @@ const (
 	FreshnessStale
 )
 
-// CalculateFreshness calculates the freshness of the given response at the given time.
+// CalculateFreshness calculates the freshness of a response.
 //
-// It does not consider# directives like no-cache or must-revalidate which influence whether a (stale) response can be
+// The freshnessLifetime can be calculated using [ResponseMetadata.FreshnessLifetime].
+//
+// It does not consider directives like no-cache or must-revalidate which influence whether a (stale) response can be
 // re-used.
 func CalculateFreshness(
 	currentAge time.Duration,
