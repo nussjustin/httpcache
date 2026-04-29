@@ -13,6 +13,107 @@ import (
 	"github.com/nussjustin/httpcache"
 )
 
+func TestConfig_AllowsCachedResponseFor(t *testing.T) {
+	tests := []struct {
+		name   string
+		config httpcache.Config
+		req    http.Request
+		want   bool
+	}{
+		{
+			name:   `supported method, no no-cache directive`,
+			config: httpcache.Config{},
+			req:    http.Request{Method: "GET"},
+			want:   true,
+		},
+		{
+			name:   `supported method, no-cache directive`,
+			config: httpcache.Config{},
+			req: http.Request{
+				Method: "GET",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: true,
+		},
+		{
+			name:   `supported method, no-cache directive, RespectRequestDirectiveNoCache set`,
+			config: httpcache.Config{RespectRequestDirectiveNoCache: true},
+			req: http.Request{
+				Method: "GET",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:   `unsupported method, no no-cache directive`,
+			config: httpcache.Config{},
+			req:    http.Request{Method: "POST"},
+			want:   false,
+		},
+		{
+			name:   `unsupported method, no-cache directive`,
+			config: httpcache.Config{},
+			req: http.Request{
+				Method: "POST",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:   `unsupported method, no-cache directive, RespectRequestDirectiveNoCache set`,
+			config: httpcache.Config{RespectRequestDirectiveNoCache: true},
+			req: http.Request{
+				Method: "POST",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:   `supported method by custom list, no no-cache directive`,
+			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}},
+			req:    http.Request{Method: "POST"},
+			want:   true,
+		},
+		{
+			name:   `supported method by custom list, no-cache directive`,
+			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}},
+			req: http.Request{
+				Method: "POST",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: true,
+		},
+		{
+			name:   `supported method by custom list, no-cache directive, RespectRequestDirectiveNoCache set`,
+			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}, RespectRequestDirectiveNoCache: true},
+			req: http.Request{
+				Method: "POST",
+				Header: http.Header{
+					"Cache-Control": []string{"no-cache"},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.AllowsCachedResponseFor(&tt.req); got != tt.want {
+				t.Errorf("Config.AllowsCachedResponseFor() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfig_AllowsStoringResponse(t *testing.T) {
 	tests := []struct {
 		name        string

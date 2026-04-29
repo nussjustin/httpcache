@@ -25,7 +25,15 @@ type Config struct {
 	// Private configures the cache to be private, as understood by RFC 9111.
 	Private bool
 
-	// RespectRequestDirectiveNoStore can be set to enable checking of the no-store Cache-Control request directive.
+	// RespectRequestDirectiveNoCache determines whether [Config.AllowsCachedResponseFor] checks the no-cache
+	// Cache-Control directive.
+	//
+	// If true, the directive is checked and, if set, causes the method to return false. Otherwise, the directive is
+	// ignored.
+	RespectRequestDirectiveNoCache bool
+
+	// RespectRequestDirectiveNoStore can be set to enable checking of the no-store Cache-Control request directive
+	// in [Config.AllowsStoringResponse].
 	//
 	// Note that while RFC 9111 specifies that the no-store directive should prevent responses from being cached, the
 	// steps for determining whether a response can be stored do not actually say anything about the directive.
@@ -82,6 +90,29 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusGone,
 	http.StatusRequestURITooLong,
 	http.StatusNotImplemented,
+}
+
+// AllowsCachedResponseFor returns true if the config allows returning a cached response for the given request.
+//
+// By default, this only checks if the request method is supported, but if [Config.RespectRequestDirectiveNoCache] is
+// true, it also checks if the request has no no-cache Cache-Control directive.
+func (c Config) AllowsCachedResponseFor(req *http.Request) bool {
+	if !c.isSupportedRequestMethod(req.Method) {
+		return false
+	}
+
+	if c.RespectRequestDirectiveNoCache {
+		var reqDirectives RequestDirectives
+		if s := strings.Join(req.Header["Cache-Control"], ","); s != "" {
+			reqDirectives, _ = ParseRequestDirectives(s)
+		}
+
+		if reqDirectives.NoCache {
+			return false
+		}
+	}
+
+	return true
 }
 
 // AllowsStoringResponse checks if the given response can be cached.
