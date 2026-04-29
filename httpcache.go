@@ -23,20 +23,19 @@ type Config struct {
 	// If nil, such responses are not cached.
 	CanUnderstandResponseCode func(code int) bool
 
+	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
+	//
+	// If nil, defaults to DefaultHeuristicallyCacheableStatusCodes.
+	HeuristicallyCacheableStatusCode []int
+
+	// Private configures the cache to be private, as understood by RFC 9111.
+	Private bool
+
 	// RespectRequestDirectiveNoStore can be set to enable checking of the no-store Cache-Control request directive.
 	//
 	// Note that while RFC 9111 specifies that the no-store directive should prevent responses from being cached, the
 	// steps for determining whether a response can be stored do not actually say anything about the directive.
 	RespectRequestDirectiveNoStore bool
-
-	// IsHeuristicallyCacheableStatusCode is called to check if a status code can be cached without explicit opt-in via
-	// cache directives.
-	//
-	// If nil, the status codes from [HeuristicallyCacheableStatusCodes] are allowed.
-	IsHeuristicallyCacheableStatusCode func(code int) bool
-
-	// Private configures the cache to be private, as understood by RFC 9111.
-	Private bool
 
 	// RespectPrivateHeaders can be set to true to allow storing restores even when the private directive is specified,
 	// as long as the private directive has specified at least one header in its value.
@@ -54,7 +53,7 @@ type Config struct {
 	// - Proxy-Authorization
 	StoreProxyHeaders bool
 
-	// SupportedRequestMethods contains a list of request methods that can be cached.
+	// SupportedRequestMethods is the list of request methods that can be cached.
 	//
 	// If nil, defaults to DefaultSupportedRequestMethods.
 	SupportedRequestMethods []string
@@ -67,9 +66,9 @@ var DefaultSupportedRequestMethods = []string{
 	"QUERY",
 }
 
-// HeuristicallyCacheableStatusCodes contains HTTP response codes specified in RFC 9110 that are allowed to be cached
-// by default.
-var HeuristicallyCacheableStatusCodes = []int{
+// DefaultHeuristicallyCacheableStatusCodes contains HTTP response codes specified in RFC 9110 that are allowed to be
+// cached by default, that is without requiring extra headers.
+var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusOK,
 	http.StatusNonAuthoritativeInfo,
 	http.StatusNoContent,
@@ -164,11 +163,11 @@ func (c Config) canUnderstandResponseCode(code int) bool {
 }
 
 func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
-	if c.IsHeuristicallyCacheableStatusCode == nil {
-		return slices.Contains(HeuristicallyCacheableStatusCodes, code)
+	s := c.HeuristicallyCacheableStatusCode
+	if s == nil {
+		s = DefaultHeuristicallyCacheableStatusCodes
 	}
-
-	return c.IsHeuristicallyCacheableStatusCode(code)
+	return slices.Contains(s, code)
 }
 
 func (c Config) isSupportedRequestMethod(method string) bool {

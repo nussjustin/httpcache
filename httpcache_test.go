@@ -349,30 +349,6 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `heuristically cacheable status, allowed by callback`,
-			config: httpcache.Config{
-				IsHeuristicallyCacheableStatusCode: func(code int) bool {
-					return code == http.StatusOK
-				},
-			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `heuristically cacheable status, not allowed by callback`,
-			config: httpcache.Config{
-				IsHeuristicallyCacheableStatusCode: func(code int) bool {
-					return code != http.StatusOK
-				},
-			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
 			name:        `non-heuristically cacheable status`,
 			config:      httpcache.Config{},
 			req:         httpcache.RequestMetadata{Method: "GET"},
@@ -381,11 +357,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: false,
 		},
 		{
-			name: `non-heuristically cacheable status, allowed by callback`,
+			name: `heuristically cacheable status by custom list`,
 			config: httpcache.Config{
-				IsHeuristicallyCacheableStatusCode: func(code int) bool {
-					return code == http.StatusCreated
-				},
+				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
 			},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
@@ -393,14 +367,12 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `non-heuristically cacheable status, not allowed by callback`,
+			name: `non-heuristically cacheable status by custom list`,
 			config: httpcache.Config{
-				IsHeuristicallyCacheableStatusCode: func(code int) bool {
-					return code != http.StatusCreated
-				},
+				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
 			},
 			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
+			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
