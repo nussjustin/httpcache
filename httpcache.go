@@ -17,12 +17,6 @@ import (
 
 // Config defines characteristics of the cache based on which cacheability can be calculated.
 type Config struct {
-	// CanUnderstandResponseCode is used to check if a response with status code 206 or 304, or with must-understand cache
-	// directive should be cached.
-	//
-	// If nil, such responses are not cached.
-	CanUnderstandResponseCode func(code int) bool
-
 	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
 	//
 	// If nil, defaults to DefaultHeuristicallyCacheableStatusCodes.
@@ -57,6 +51,13 @@ type Config struct {
 	//
 	// If nil, defaults to DefaultSupportedRequestMethods.
 	SupportedRequestMethods []string
+
+	// UnderstoodResponseCodes must contain the response codes that the cache understands.
+	//
+	// Responses with status codes 206 or 304 or the must-understand directive must be understood to be cacheable.
+	//
+	// Other responses are not required to be understood.
+	UnderstoodResponseCodes []int
 }
 
 // DefaultSupportedRequestMethods is the default list of request methods that allow caching.
@@ -102,7 +103,7 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	// - if the response status code is 206 or 304, or the must-understand cache directive (see Section 5.2.2.3) is
 	//   present: the cache understands the response status code
 	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || resp.Directives.MustUnderstand {
-		if !c.canUnderstandResponseCode(resp.StatusCode) {
+		if !c.isUnderstoodResponseCode(resp.StatusCode) {
 			return false
 		}
 	}
@@ -154,14 +155,6 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	return true
 }
 
-func (c Config) canUnderstandResponseCode(code int) bool {
-	if c.CanUnderstandResponseCode == nil {
-		return false
-	}
-
-	return c.CanUnderstandResponseCode(code)
-}
-
 func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
 	s := c.HeuristicallyCacheableStatusCode
 	if s == nil {
@@ -176,6 +169,10 @@ func (c Config) isSupportedRequestMethod(method string) bool {
 		s = DefaultSupportedRequestMethods
 	}
 	return slices.Contains(s, method)
+}
+
+func (c Config) isUnderstoodResponseCode(code int) bool {
+	return slices.Contains(c.UnderstoodResponseCodes, code)
 }
 
 // RemoveUnstorableHeaders removes response headers that must not be stored.

@@ -86,7 +86,7 @@ func TestConfig_CanStore(t *testing.T) {
 		},
 
 		{
-			name:        `status code 206`,
+			name:        `status code 206, empty config`,
 			config:      httpcache.Config{},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
@@ -94,11 +94,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: false,
 		},
 		{
-			name: `status code 206, understood by callback`,
+			name: `status code 206, understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code == http.StatusPartialContent
-				},
+				UnderstoodResponseCodes: []int{http.StatusPartialContent},
 			},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
@@ -106,11 +104,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `status code 206, not understood by callback`,
+			name: `status code 206, not understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code != http.StatusPartialContent
-				},
+				UnderstoodResponseCodes: []int{http.StatusNotModified},
 			},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
@@ -119,7 +115,7 @@ func TestConfig_CanStore(t *testing.T) {
 		},
 
 		{
-			name:        `status code 304`,
+			name:        `status code 304, empty config`,
 			config:      httpcache.Config{},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
@@ -127,11 +123,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: false,
 		},
 		{
-			name: `status code 304, understood by callback`,
+			name: `status code 304, understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code == http.StatusNotModified
-				},
+				UnderstoodResponseCodes: []int{http.StatusNotModified},
 			},
 			req: httpcache.RequestMetadata{Method: "GET"},
 			resp: httpcache.ResponseMetadata{
@@ -144,11 +138,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `status code 304, not understood by callback`,
+			name: `status code 304, not understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code != http.StatusNotModified
-				},
+				UnderstoodResponseCodes: []int{http.StatusPartialContent},
 			},
 			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
@@ -157,7 +149,7 @@ func TestConfig_CanStore(t *testing.T) {
 		},
 
 		{
-			name:   `must-understand`,
+			name:   `must-understand, empty config`,
 			config: httpcache.Config{},
 			req:    httpcache.RequestMetadata{Method: "GET"},
 			resp: httpcache.ResponseMetadata{
@@ -170,11 +162,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: false,
 		},
 		{
-			name: `must-understand, understood by callback`,
+			name: `must-understand, understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code == http.StatusOK
-				},
+				UnderstoodResponseCodes: []int{http.StatusOK},
 			},
 			req: httpcache.RequestMetadata{Method: "GET"},
 			resp: httpcache.ResponseMetadata{
@@ -187,11 +177,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `must-understand, not understood by callback`,
+			name: `must-understand, not understood`,
 			config: httpcache.Config{
-				CanUnderstandResponseCode: func(code int) bool {
-					return code != http.StatusOK
-				},
+				UnderstoodResponseCodes: []int{http.StatusNotModified, http.StatusPartialContent},
 			},
 			req: httpcache.RequestMetadata{Method: "GET"},
 			resp: httpcache.ResponseMetadata{
