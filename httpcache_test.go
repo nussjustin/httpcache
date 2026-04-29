@@ -257,8 +257,8 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name:   `private, with headers, RespectPrivateHeaders set`,
-			config: httpcache.Config{RespectPrivateHeaders: true},
+			name:   `private, with headers, RespectResponseDirectivePrivateValue set`,
+			config: httpcache.Config{RespectResponseDirectivePrivateValue: true},
 			resp: http.Response{
 				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
@@ -598,8 +598,8 @@ func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 		},
 
 		{
-			name:   `RespectPrivateHeaders set`,
-			config: httpcache.Config{RespectPrivateHeaders: true},
+			name:   `RespectResponseDirectivePrivateValue set`,
+			config: httpcache.Config{RespectResponseDirectivePrivateValue: true},
 			headers: http.Header{
 				"Age":                       {`10`},
 				"Cache-Control":             {`max-age=0, private="Extra-Header-1 extra-header-2"`},

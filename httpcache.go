@@ -31,14 +31,14 @@ type Config struct {
 	// steps for determining whether a response can be stored do not actually say anything about the directive.
 	RespectRequestDirectiveNoStore bool
 
-	// RespectPrivateHeaders can be set to true to allow storing responses even when the private directive is specified,
-	// as long as the private directive has specified at least one header in its value.
+	// RespectResponseDirectivePrivateValue can be set to true to allow storing responses even when the private
+	// directive is specified, as long as the private directive has specified at least one header in its value.
 	//
 	// It also causes [Config.RemoveUnstorableHeaders] to remove headers specified for the "private" response directive,
 	// but not for the "no-cache" directive (as those are still usable depending on the request).
 	//
 	// If false, the directive is treated as if it had no value.
-	RespectPrivateHeaders bool
+	RespectResponseDirectivePrivateValue bool
 
 	// StoreProxyHeaders, if set, causes [Config.RemoveUnstorableHeaders] to not remove the following headers:
 	//
@@ -122,7 +122,7 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 
 	// - if the cache is shared: the private response directive is either not present or allows a shared cache to store
 	//   a modified response; see Section 5.2.2.7);
-	if !c.Private && respDirectives.Private && (!c.RespectPrivateHeaders || len(respDirectives.PrivateHeaders) == 0) {
+	if !c.Private && respDirectives.Private && (!c.RespectResponseDirectivePrivateValue || len(respDirectives.PrivateHeaders) == 0) {
 		return false
 	}
 
@@ -224,7 +224,7 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 		}
 	}
 
-	if c.RespectPrivateHeaders && len(headers["Cache-Control"]) > 0 {
+	if c.RespectResponseDirectivePrivateValue && len(headers["Cache-Control"]) > 0 {
 		// The no-cache (Section 5.2.2.4) and private (Section 5.2.2.7) cache directives can have arguments that prevent
 		// storage of header fields by all caches and shared caches, respectively.
 
