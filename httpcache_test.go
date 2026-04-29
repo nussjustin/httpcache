@@ -17,41 +17,48 @@ func TestConfig_CanStore(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      httpcache.Config
-		req         httpcache.RequestMetadata
-		resp        httpcache.ResponseMetadata
+		resp        http.Response
 		wantPublic  bool
 		wantPrivate bool
 	}{
 		{
-			name:        `simple GET`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			name:   `simple GET`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 		{
-			name:        `simple HEAD`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "HEAD"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			name:   `simple HEAD`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "HEAD"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 		{
-			name:        `simple QUERY`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "QUERY"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			name:   `simple QUERY`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "QUERY"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 
 		{
-			name:        `unsupported request method`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "POST"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			name:   `unsupported request method`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "POST"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -60,8 +67,10 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				SupportedRequestMethods: []string{"POST"},
 			},
-			req:         httpcache.RequestMetadata{Method: "POST"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			resp: http.Response{
+				Request:    &http.Request{Method: "POST"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -70,26 +79,32 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				SupportedRequestMethods: []string{"POST"},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 
 		{
-			name:        `invalid status code`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusContinue},
+			name:   `invalid status code`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusContinue,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 
 		{
-			name:        `status code 206, empty config`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
+			name:   `status code 206, empty config`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusPartialContent,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -98,8 +113,10 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				UnderstoodResponseCodes: []int{http.StatusPartialContent},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusPartialContent,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -108,30 +125,34 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				UnderstoodResponseCodes: []int{http.StatusNotModified},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusPartialContent},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusPartialContent,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 
 		{
-			name:        `status code 304, empty config`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
+			name: `status code 304, empty config`,
+			config: httpcache.Config{
+				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
+			},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusNotModified,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
 		{
 			name: `status code 304, understood`,
 			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusNotModified},
+				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
+				UnderstoodResponseCodes:          []int{http.StatusNotModified},
 			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Public: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusNotModified,
 			},
 			wantPublic:  true,
@@ -140,10 +161,13 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name: `status code 304, not understood`,
 			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusPartialContent},
+				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
+				UnderstoodResponseCodes:          []int{http.StatusPartialContent},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusNotModified},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusNotModified,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -151,12 +175,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `must-understand, empty config`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MustUnderstand: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"must-understand"},
+				},
 			},
 			wantPublic:  false,
 			wantPrivate: false,
@@ -166,12 +190,12 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				UnderstoodResponseCodes: []int{http.StatusOK},
 			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MustUnderstand: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"must-understand"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -181,12 +205,12 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				UnderstoodResponseCodes: []int{http.StatusNotModified, http.StatusPartialContent},
 			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MustUnderstand: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"must-understand"},
+				},
 			},
 			wantPublic:  false,
 			wantPrivate: false,
@@ -195,12 +219,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `no-store`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					NoStore: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"no-store"},
+				},
 			},
 			wantPublic:  false,
 			wantPrivate: false,
@@ -209,12 +233,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Private: true,
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"private"},
+				},
 			},
 			wantPublic:  false,
 			wantPrivate: true,
@@ -222,13 +246,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private, with headers`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Private:        true,
-					PrivateHeaders: []string{"header"},
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"private=header"},
+				},
 			},
 			wantPublic:  false,
 			wantPrivate: true,
@@ -236,13 +259,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private, with headers, RespectPrivateHeaders set`,
 			config: httpcache.Config{RespectPrivateHeaders: true},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Private:        true,
-					PrivateHeaders: []string{"header"},
-				},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"private=header"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -251,11 +273,13 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     "GET",
-			},
-			resp: httpcache.ResponseMetadata{
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Authorization": []string{"Bearer test"},
+					},
+				},
 				StatusCode: http.StatusOK,
 			},
 			wantPublic:  false,
@@ -264,15 +288,17 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, must-revalidate`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     "GET",
-			},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MustRevalidate: true,
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Authorization": []string{"Bearer test"},
+					},
 				},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"must-revalidate"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -280,15 +306,17 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, public`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     "GET",
-			},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Public: true,
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Authorization": []string{"Bearer test"},
+					},
 				},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"public"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -296,15 +324,17 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, s-max-age > 0`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     "GET",
-			},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					SMaxAge: OptValue(5 * time.Second),
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Authorization": []string{"Bearer test"},
+					},
 				},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"s-maxage=5"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -312,35 +342,29 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `authorized, s-max-age == 0`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     "GET",
-			},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					SMaxAge: OptValue(0 * time.Second),
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Authorization": []string{"Bearer test"},
+					},
 				},
 				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"s-maxage=0"},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 
 		{
-			name:   `heuristically cacheable status code`,
+			name:   `non-heuristically cacheable status`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				StatusCode: http.StatusOK,
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusCreated,
 			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:        `non-heuristically cacheable status`,
-			config:      httpcache.Config{},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -349,8 +373,10 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusCreated},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusCreated,
+			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
@@ -359,8 +385,10 @@ func TestConfig_CanStore(t *testing.T) {
 			config: httpcache.Config{
 				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
 			},
-			req:         httpcache.RequestMetadata{Method: "GET"},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+			},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -368,12 +396,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `public`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Public: true,
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"public"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -382,12 +410,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `private`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					Private: true,
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"private"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  false,
 			wantPrivate: true,
@@ -396,10 +424,29 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `expires`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Expires:    time.Date(2015, time.October, 21, 7, 28, 0, 0, time.UTC),
-				StatusCode: http.StatusCreated, // not heuristically cacheable
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Expires": []string{"Mon, 02 Jan 2007 15:04:05 GMT"},
+				},
+			},
+			wantPublic:  true,
+			wantPrivate: true,
+		},
+		{
+			name:   `multiple expires`,
+			config: httpcache.Config{},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Expires": []string{
+						"Mon, 02 Jan 2007 15:04:05 GMT",
+						// Only first should be considered
+						"Mon, 03 Jan 2007 15:04:05 INVALID",
+					},
+				},
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -408,12 +455,12 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `max-age > 0`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(5 * time.Second),
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=5"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: true,
@@ -421,39 +468,43 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `max-age == 0`,
 			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(0 * time.Second),
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"max-age=0"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 
 		{
-			name:   `s-maxage > 0`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					SMaxAge: OptValue(5 * time.Second),
+			name: `s-maxage > 0`,
+			config: httpcache.Config{
+				HeuristicallyCacheableStatusCode: []int{},
+			},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"s-maxage=5"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: false,
 		},
 		{
-			name:   `s-maxage == 0`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				Directives: httpcache.ResponseDirectives{
-					SMaxAge: OptValue(0 * time.Second),
+			name: `s-maxage == 0`,
+			config: httpcache.Config{
+				HeuristicallyCacheableStatusCode: []int{},
+			},
+			resp: http.Response{
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"s-maxage=0"},
 				},
-				StatusCode: http.StatusCreated, // not heuristically cacheable
 			},
 			wantPublic:  true,
 			wantPrivate: false,
@@ -462,26 +513,30 @@ func TestConfig_CanStore(t *testing.T) {
 		{
 			name:   `request no-store`,
 			config: httpcache.Config{},
-			req: httpcache.RequestMetadata{
-				Directives: httpcache.RequestDirectives{
-					NoStore: true,
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Cache-Control": []string{"no-store"},
+					},
 				},
-				Method: "GET",
+				StatusCode: http.StatusOK,
 			},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  true,
 			wantPrivate: true,
 		},
 		{
 			name:   `request no-store, RespectRequestDirectiveNoStore set`,
 			config: httpcache.Config{RespectRequestDirectiveNoStore: true},
-			req: httpcache.RequestMetadata{
-				Directives: httpcache.RequestDirectives{
-					NoStore: true,
+			resp: http.Response{
+				Request: &http.Request{
+					Method: "GET",
+					Header: http.Header{
+						"Cache-Control": []string{"no-store"},
+					},
 				},
-				Method: "GET",
+				StatusCode: http.StatusOK,
 			},
-			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,
 		},
@@ -492,14 +547,14 @@ func TestConfig_CanStore(t *testing.T) {
 			public := tt.config
 			public.Private = false
 
-			if got := public.CanStore(tt.req, tt.resp); got != tt.wantPublic {
+			if got := public.CanStore(&tt.resp); got != tt.wantPublic {
 				t.Errorf("Config{Private: false}.CanStore() = %v, want %v", got, tt.wantPublic)
 			}
 
 			private := tt.config
 			private.Private = true
 
-			if got := private.CanStore(tt.req, tt.resp); got != tt.wantPrivate {
+			if got := private.CanStore(&tt.resp); got != tt.wantPrivate {
 				t.Errorf("Config{Private: true}.CanStore() = %v, want %v", got, tt.wantPrivate)
 			}
 		})

@@ -31,7 +31,7 @@ type Config struct {
 	// steps for determining whether a response can be stored do not actually say anything about the directive.
 	RespectRequestDirectiveNoStore bool
 
-	// RespectPrivateHeaders can be set to true to allow storing restores even when the private directive is specified,
+	// RespectPrivateHeaders can be set to true to allow storing responses even when the private directive is specified,
 	// as long as the private directive has specified at least one header in its value.
 	//
 	// It also causes [Config.RemoveUnstorableHeaders] to remove headers specified for the "private" response directive,
@@ -84,15 +84,22 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusNotImplemented,
 }
 
-// CanStore checks if a response can be cached and for how long.
-func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
+// CanStore checks if the given response can be cached.
+//
+// The response must have an associated request.
+func (c Config) CanStore(resp *http.Response) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:
 
 	// - the request method is understood by the cache;
-	if !c.isSupportedRequestMethod(req.Method) {
+	if !c.isSupportedRequestMethod(resp.Request.Method) {
 		return false
+	}
+
+	var respDirectives ResponseDirectives
+	if s := strings.Join(resp.Header["Cache-Control"], ","); s != "" {
+		respDirectives, _ = ParseResponseDirectives(s)
 	}
 
 	// - the response status code is final (see Section 15 of [HTTP]);
@@ -102,41 +109,41 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 
 	// - if the response status code is 206 or 304, or the must-understand cache directive (see Section 5.2.2.3) is
 	//   present: the cache understands the response status code
-	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || resp.Directives.MustUnderstand {
+	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || respDirectives.MustUnderstand {
 		if !c.isUnderstoodResponseCode(resp.StatusCode) {
 			return false
 		}
 	}
 
 	// - the no-store cache directive is not present in the response (see Section 5.2.2.5);
-	if resp.Directives.NoStore {
+	if respDirectives.NoStore {
 		return false
 	}
 
 	// - if the cache is shared: the private response directive is either not present or allows a shared cache to store
 	//   a modified response; see Section 5.2.2.7);
-	if !c.Private && resp.Directives.Private && (!c.RespectPrivateHeaders || len(resp.Directives.PrivateHeaders) == 0) {
+	if !c.Private && respDirectives.Private && (!c.RespectPrivateHeaders || len(respDirectives.PrivateHeaders) == 0) {
 		return false
 	}
 
 	// - if the cache is shared: the Authorization header field is not present in the request (see Section 11.6.2 of
 	//   [HTTP]) or a response directive is present that explicitly allows shared caching (see Section 3.5); and
-	if !c.Private && req.Authorized && !resp.Directives.MustRevalidate && !resp.Directives.Public && !resp.Directives.SMaxAge.Valid {
+	if !c.Private && len(resp.Request.Header["Authorization"]) != 0 && !respDirectives.MustRevalidate && !respDirectives.Public && !respDirectives.SMaxAge.Valid {
 		return false
 	}
 
 	// - the response contains at least one of the following
 	switch {
 	// a public response directive (see Section 5.2.2.9);
-	case resp.Directives.Public:
+	case respDirectives.Public:
 	// a private response directive, if the cache is not shared (see Section 5.2.2.7);
-	case c.Private && resp.Directives.Private:
+	case c.Private && respDirectives.Private:
 	// an Expires header field (see Section 5.3);
-	case !resp.Expires.IsZero():
+	case hasValidExpires(resp.Header):
 	// a max-age response directive (see Section 5.2.2.1);
-	case resp.Directives.MaxAge.Valid:
+	case respDirectives.MaxAge.Valid:
 	// if the cache is shared: an s-maxage response directive (see Section 5.2.2.10);
-	case !c.Private && resp.Directives.SMaxAge.Valid:
+	case !c.Private && respDirectives.SMaxAge.Valid:
 	// a cache extension that allows it to be cached (see Section 5.2.3); or
 	case false: // not supported
 	// a status code that is defined as heuristically cacheable (see Section 4.2.2).
@@ -146,13 +153,34 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	}
 
 	if c.RespectRequestDirectiveNoStore {
+		var reqDirectives RequestDirectives
+		if s := strings.Join(resp.Request.Header["Cache-Control"], ","); s != "" {
+			reqDirectives, _ = ParseRequestDirectives(s)
+		}
+
 		// Note: This is not actually part of "3. Storing Responses in Caches".
-		if req.Directives.NoStore {
+		if reqDirectives.NoStore {
 			return false
 		}
 	}
 
 	return true
+}
+
+func hasValidExpires(h http.Header) bool {
+	ss := h["Expires"]
+
+	if len(ss) == 0 {
+		return false
+	}
+
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+	//
+	// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+	// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+	// should be considered stale.
+	expires, _ := ParseExpires(ss[0])
+	return !expires.IsZero()
 }
 
 func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
