@@ -84,10 +84,10 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusNotImplemented,
 }
 
-// CanStore checks if the given response can be cached.
+// AllowsStoringResponse checks if the given response can be cached.
 //
 // The response must have an associated request.
-func (c Config) CanStore(resp *http.Response) bool {
+func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:

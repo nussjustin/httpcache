@@ -13,7 +13,7 @@ import (
 	"github.com/nussjustin/httpcache"
 )
 
-func TestConfig_CanStore(t *testing.T) {
+func TestConfig_AllowsStoringResponse(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      httpcache.Config
@@ -547,15 +547,15 @@ func TestConfig_CanStore(t *testing.T) {
 			public := tt.config
 			public.Private = false
 
-			if got := public.CanStore(&tt.resp); got != tt.wantPublic {
-				t.Errorf("Config{Private: false}.CanStore() = %v, want %v", got, tt.wantPublic)
+			if got := public.AllowsStoringResponse(&tt.resp); got != tt.wantPublic {
+				t.Errorf("Config{Private: false}.AllowsStoringResponse() = %v, want %v", got, tt.wantPublic)
 			}
 
 			private := tt.config
 			private.Private = true
 
-			if got := private.CanStore(&tt.resp); got != tt.wantPrivate {
-				t.Errorf("Config{Private: true}.CanStore() = %v, want %v", got, tt.wantPrivate)
+			if got := private.AllowsStoringResponse(&tt.resp); got != tt.wantPrivate {
+				t.Errorf("Config{Private: true}.AllowsStoringResponse() = %v, want %v", got, tt.wantPrivate)
 			}
 		})
 	}
