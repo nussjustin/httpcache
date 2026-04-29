@@ -48,7 +48,7 @@ func TestConfig_CanStore(t *testing.T) {
 		},
 
 		{
-			name:        `invalid method`,
+			name:        `unsupported request method`,
 			config:      httpcache.Config{},
 			req:         httpcache.RequestMetadata{Method: "POST"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
@@ -56,11 +56,9 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: false,
 		},
 		{
-			name: `invalid method, allowed by callback`,
+			name: `request method supported by custom method list`,
 			config: httpcache.Config{
-				SupportedRequestMethod: func(method string) bool {
-					return method == "POST"
-				},
+				SupportedRequestMethods: []string{"POST"},
 			},
 			req:         httpcache.RequestMetadata{Method: "POST"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
@@ -68,13 +66,11 @@ func TestConfig_CanStore(t *testing.T) {
 			wantPrivate: true,
 		},
 		{
-			name: `invalid method, not allowed by callback`,
+			name: `request method not supported by custom method list`,
 			config: httpcache.Config{
-				SupportedRequestMethod: func(method string) bool {
-					return method == "PUT"
-				},
+				SupportedRequestMethods: []string{"POST"},
 			},
-			req:         httpcache.RequestMetadata{Method: "POST"},
+			req:         httpcache.RequestMetadata{Method: "GET"},
 			resp:        httpcache.ResponseMetadata{StatusCode: http.StatusOK},
 			wantPublic:  false,
 			wantPrivate: false,

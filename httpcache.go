@@ -54,10 +54,17 @@ type Config struct {
 	// - Proxy-Authorization
 	StoreProxyHeaders bool
 
-	// SupportedRequestMethod is called to check if the request method can be cached,
+	// SupportedRequestMethods contains a list of request methods that can be cached.
 	//
-	// If nil, only GET, HEAD and QUERY methods can be cached.
-	SupportedRequestMethod func(method string) bool
+	// If nil, defaults to DefaultSupportedRequestMethods.
+	SupportedRequestMethods []string
+}
+
+// DefaultSupportedRequestMethods is the default list of request methods that allow caching.
+var DefaultSupportedRequestMethods = []string{
+	"GET",
+	"HEAD",
+	"QUERY",
 }
 
 // HeuristicallyCacheableStatusCodes contains HTTP response codes specified in RFC 9110 that are allowed to be cached
@@ -84,7 +91,7 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	// A cache MUST NOT store a response to a request unless:
 
 	// - the request method is understood by the cache;
-	if !c.supportedRequestMethod(req.Method) {
+	if !c.isSupportedRequestMethod(req.Method) {
 		return false
 	}
 
@@ -164,12 +171,12 @@ func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
 	return c.IsHeuristicallyCacheableStatusCode(code)
 }
 
-func (c Config) supportedRequestMethod(method string) bool {
-	if c.SupportedRequestMethod == nil {
-		return method == "GET" || method == "HEAD" || method == "QUERY"
+func (c Config) isSupportedRequestMethod(method string) bool {
+	s := c.SupportedRequestMethods
+	if s == nil {
+		s = DefaultSupportedRequestMethods
 	}
-
-	return c.SupportedRequestMethod(method)
+	return slices.Contains(s, method)
 }
 
 // RemoveUnstorableHeaders removes response headers that must not be stored.
