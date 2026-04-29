@@ -277,6 +277,142 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 	}
 }
 
+// CalculateAge calculates the age for a response as defined in RFC 9111, Section 4.2.3.
+//
+// reqTime must contain the local time the request was sent.
+// respTime must contain the local time the response was received.
+func CalculateAge(
+	now time.Time,
+	reqTime time.Time,
+	respAge Opt[time.Duration],
+	respDate time.Time,
+	respTime time.Time,
+) time.Duration {
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-age
+	//
+	// A response's age can be calculated in two entirely independent ways:
+
+	// 1. the "apparent_age": response_time minus date_value, if the implementation's clock is reasonably well
+	// synchronized to the origin server's clock. If the result is negative, the result is replaced by zero.
+	apparentAge := max(0, respTime.Sub(respDate))
+
+	// 2. the "corrected_age_value", if all of the caches along the response path implement HTTP/1.1 or greater. A cache
+	// MUST interpret this value relative to the time the request was initiated, not the time that the response was
+	// received.
+	responseDelay := respTime.Sub(reqTime)
+	correctedAgeValue := respAge.Value + responseDelay
+
+	// The corrected_age_value MAY be used as the corrected_initial_age.
+	correctedInitialAge := correctedAgeValue
+
+	// In circumstances where very old cache implementations that might not correctly insert Age are present, ...
+	if !respAge.Valid {
+		// ... corrected_initial_age can be calculated more conservatively as
+		correctedInitialAge = max(apparentAge, correctedAgeValue)
+	}
+
+	// The current_age of a stored response can then be calculated by adding the time (in seconds) since the stored
+	// response was last validated by the origin server to the corrected_initial_age.
+	residentTime := now.Sub(respTime)
+	currentAge := correctedInitialAge + residentTime
+
+	return currentAge
+}
+
+// Freshness is an enumeration of possible freshness states.
+type Freshness uint
+
+const (
+	// FreshnessExpired is used for responses that are expired and can no longer be used.
+	FreshnessExpired Freshness = iota
+
+	// FreshnessFresh is used for responses that are fresh and can be reused.
+	FreshnessFresh
+
+	// FreshnessStale is used for responses that are no longer fresh but may still be used.
+	FreshnessStale
+)
+
+// CalculateFreshness calculates the freshness of a response.
+//
+// The freshnessLifetime can be calculated using [ResponseMetadata.FreshnessLifetime].
+//
+// It does not consider directives like no-cache or must-revalidate which influence whether a (stale) response can be
+// re-used.
+func CalculateFreshness(
+	currentAge time.Duration,
+	freshnessLifetime time.Duration,
+	minFresh Opt[time.Duration],
+	maxAge Opt[time.Duration],
+	maxStale Opt[time.Duration],
+) Freshness {
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-freshness
+	//
+	// The calculation to determine if a response is fresh is:
+	responseIsFresh := freshnessLifetime > currentAge
+
+	// Clients can send the max-age or min-fresh request directives (Section 5.2.1) to suggest limits on the freshness
+	// calculations for the corresponding response. However, caches are not required to honor them.
+	if maxAge.Valid && maxAge.Value < currentAge {
+		responseIsFresh = false
+	}
+
+	if minFresh.Valid && freshnessLifetime < currentAge+minFresh.Value {
+		responseIsFresh = false
+	}
+
+	if responseIsFresh {
+		return FreshnessFresh
+	}
+
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-serving-stale-responses
+	//
+	// A "stale" response is one that either has explicit expiry information or is allowed to have heuristic expiry
+	// calculated, but is not fresh according to the calculations in Section 4.2.
+	if maxStale.Valid && maxStale.Value >= currentAge-freshnessLifetime {
+		return FreshnessStale
+	}
+
+	return FreshnessExpired
+}
+
+// CalculateFreshnessLifetime returns how long a response can be considered to be fresh, as defined in RFC 9111,
+// Section 4.2.
+func CalculateFreshnessLifetime(
+	privateCache bool,
+	date time.Time,
+	expires time.Time,
+	maxAge Opt[time.Duration],
+	sMaxAge Opt[time.Duration],
+) (time.Duration, bool) {
+	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+	//
+	// A cache can calculate the freshness lifetime (denoted as freshness_lifetime) of a response by evaluating the
+	// following rules and using the first match:
+
+	// If the cache is shared and the s-maxage response directive (Section 5.2.2.10) is present, use its value, or
+	if sMaxAge.Valid && !privateCache {
+		return sMaxAge.Value, true
+	}
+
+	// If the max-age response directive (Section 5.2.2.1) is present, use its value, or
+	if maxAge.Valid {
+		return maxAge.Value, true
+	}
+
+	// If the Expires response header field (Section 5.3) is present, use its value minus the value of the Date
+	// response header field (using the time the message was received if it is not present, as per Section 6.6.1
+	// of [HTTP]), or
+	if !expires.IsZero() {
+		return expires.Sub(date), true
+	}
+
+	// Otherwise, no explicit expiration time is present in the response. A heuristic freshness lifetime might be
+	// applicable; see Section 4.2.2.
+
+	return 0, false // We do not support heuristic freshness lifetime
+}
+
 // ParseAge parses a duration in seconds e.g. from the HTTP Age header or the max-/min-* Cache-Control directives.
 func ParseAge(s string) (time.Duration, error) {
 	d, err := parseDeltaSeconds(s)
@@ -642,44 +778,6 @@ func (d RequestDirectives) String() string {
 	return strings.Join(ss, ", ")
 }
 
-// RequestMetadata contains HTTP request information related to caching. It can be used with [Config] to check if
-// a request is cacheable or not.
-type RequestMetadata struct {
-	// Authorized is true if the Authorization header was set.
-	Authorized bool
-
-	// Method contains the HTTP method of the request.
-	Method string
-
-	// Directives contains the parsed Cache-Control directives.
-	Directives RequestDirectives
-
-	// Time contains the time at which the request was sent.
-	Time time.Time
-}
-
-// RequestMetadataFromRequest builds a RequestMetadata object from an actual HTTP request.
-//
-// The function will try to parse as much as it can and will return the potentially partial result together with any
-// errors, joined using [errors.Join].
-func RequestMetadataFromRequest(req *http.Request, at time.Time) (RequestMetadata, error) {
-	var errs []error
-	var err error
-
-	d := RequestMetadata{
-		Authorized: len(req.Header["Authorization"]) != 0,
-		Method:     req.Method,
-		Time:       at,
-	}
-
-	d.Directives, err = ParseRequestDirectives(strings.Join(req.Header["Cache-Control"], ", "))
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	return d, errors.Join(errs...)
-}
-
 // ResponseDirectives contains parsed cache directives from a Cache-Control header for a response.
 type ResponseDirectives struct {
 	// https://www.rfc-editor.org/rfc/rfc9111#name-max-age-2
@@ -885,205 +983,4 @@ func (d ResponseDirectives) String() string {
 		ss = append(ss, ext.String())
 	}
 	return strings.Join(ss, ", ")
-}
-
-// ResponseMetadata contains HTTP response information related to caching. It can be used with [Config] to check if
-// a response is cacheable or not.
-type ResponseMetadata struct {
-	// Age contains the age of the response, if the response was restored from a cache.
-	Age Opt[time.Duration]
-
-	// Date is the parsed time from the Date response header.
-	Date time.Time
-
-	// Directives contains the parsed Cache-Control directives.
-	Directives ResponseDirectives
-
-	// Expires contains the parsed Expires header, if given.
-	Expires time.Time
-
-	// StatusCode is the final HTTP response code used for the response.
-	StatusCode int
-
-	// Time contains the time at which the response was received.
-	Time time.Time
-
-	// Vary contains a normalized list of headers to vary the response by.
-	Vary Vary
-}
-
-var (
-	errMissingDateHeader = errors.New("missing Date header")
-)
-
-// ResponseMetadataFromResponse builds a ResponseMetadata object from an actual HTTP response.
-//
-// If the response has multiple Expires header lines, the first one is used.
-//
-// The function will try to parse as much as it can and will return the potentially partial result together with any
-// errors, joined using [errors.Join].
-func ResponseMetadataFromResponse(resp *http.Response, at time.Time) (ResponseMetadata, error) {
-	var errs []error
-	var err error
-
-	d := ResponseMetadata{
-		StatusCode: resp.StatusCode,
-		Time:       at,
-		Vary:       ParseVary(resp.Header["Vary"]),
-	}
-
-	d.Directives, err = ParseResponseDirectives(strings.Join(resp.Header["Cache-Control"], ", "))
-	if err != nil {
-		errs = append(errs, err)
-	}
-
-	if ss := resp.Header["Age"]; len(ss) != 0 {
-		age, err := ParseAge(strings.Join(ss, ", "))
-		if err != nil {
-			errs = append(errs, err)
-		}
-		d.Age.Value, d.Age.Valid = age, err == nil
-	}
-
-	if ss := resp.Header["Date"]; len(ss) != 0 {
-		if d.Date, err = http.ParseTime(strings.Join(ss, ", ")); err != nil {
-			errs = append(errs, err)
-		}
-	} else {
-		errs = append(errs, errMissingDateHeader)
-	}
-
-	if ss := resp.Header["Expires"]; len(ss) != 0 {
-		// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
-		//
-		// When there is more than one value present for a given directive (e.g., two Expires header field lines or
-		// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
-		// should be considered stale.
-
-		if d.Expires, err = ParseExpires(ss[0]); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return d, errors.Join(errs...)
-}
-
-// FreshnessLifetime returns the time the response is considered to be fresh, as defined in RFC 9111, Section 4.2.
-func (r ResponseMetadata) FreshnessLifetime(private bool) (time.Duration, bool) {
-	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
-	//
-	// A cache can calculate the freshness lifetime (denoted as freshness_lifetime) of a response by evaluating the
-	// following rules and using the first match:
-
-	// If the cache is shared and the s-maxage response directive (Section 5.2.2.10) is present, use its value, or
-	if sMaxAge := r.Directives.SMaxAge; sMaxAge.Valid && !private {
-		return sMaxAge.Value, true
-	}
-
-	// If the max-age response directive (Section 5.2.2.1) is present, use its value, or
-	if maxAge := r.Directives.MaxAge; maxAge.Valid {
-		return maxAge.Value, true
-	}
-
-	// If the Expires response header field (Section 5.3) is present, use its value minus the value of the Date
-	// response header field (using the time the message was received if it is not present, as per Section 6.6.1
-	// of [HTTP]), or
-	if !r.Expires.IsZero() {
-		return r.Expires.Sub(r.Date), true
-	}
-
-	// Otherwise, no explicit expiration time is present in the response. A heuristic freshness lifetime might be
-	// applicable; see Section 4.2.2.
-
-	return 0, false // We do not support heuristic freshness lifetime
-}
-
-// CalculateAge calculates the age for a response as defined in RFC 9111, Section 4.2.3.
-func CalculateAge(req RequestMetadata, resp ResponseMetadata, now time.Time) time.Duration {
-	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-age
-	//
-	// A response's age can be calculated in two entirely independent ways:
-
-	// 1. the "apparent_age": response_time minus date_value, if the implementation's clock is reasonably well
-	// synchronized to the origin server's clock. If the result is negative, the result is replaced by zero.
-	apparentAge := max(0, resp.Time.Sub(resp.Date))
-
-	// 2. the "corrected_age_value", if all of the caches along the response path implement HTTP/1.1 or greater. A cache
-	// MUST interpret this value relative to the time the request was initiated, not the time that the response was
-	// received.
-	responseDelay := resp.Time.Sub(req.Time)
-	correctedAgeValue := resp.Age.Value + responseDelay
-
-	// The corrected_age_value MAY be used as the corrected_initial_age.
-	correctedInitialAge := correctedAgeValue
-
-	// In circumstances where very old cache implementations that might not correctly insert Age are present, ...
-	if !resp.Age.Valid {
-		// ... corrected_initial_age can be calculated more conservatively as
-		correctedInitialAge = max(apparentAge, correctedAgeValue)
-	}
-
-	// The current_age of a stored response can then be calculated by adding the time (in seconds) since the stored
-	// response was last validated by the origin server to the corrected_initial_age.
-	residentTime := now.Sub(resp.Time)
-	currentAge := correctedInitialAge + residentTime
-
-	return currentAge
-}
-
-// Freshness is an enumeration of possible freshness states.
-type Freshness uint
-
-const (
-	// FreshnessExpired is used for responses that are expired and can no longer be used.
-	FreshnessExpired Freshness = iota
-
-	// FreshnessFresh is used for responses that are fresh and can be reused.
-	FreshnessFresh
-
-	// FreshnessStale is used for responses that are no longer fresh but may still be used.
-	FreshnessStale
-)
-
-// CalculateFreshness calculates the freshness of a response.
-//
-// The freshnessLifetime can be calculated using [ResponseMetadata.FreshnessLifetime].
-//
-// It does not consider directives like no-cache or must-revalidate which influence whether a (stale) response can be
-// re-used.
-func CalculateFreshness(
-	currentAge time.Duration,
-	freshnessLifetime time.Duration,
-	minFresh Opt[time.Duration],
-	maxAge Opt[time.Duration],
-	maxStale Opt[time.Duration],
-) Freshness {
-	// From https://www.rfc-editor.org/rfc/rfc9111#name-freshness
-	//
-	// The calculation to determine if a response is fresh is:
-	responseIsFresh := freshnessLifetime > currentAge
-
-	// Clients can send the max-age or min-fresh request directives (Section 5.2.1) to suggest limits on the freshness
-	// calculations for the corresponding response. However, caches are not required to honor them.
-	if maxAge.Valid && maxAge.Value < currentAge {
-		responseIsFresh = false
-	}
-
-	if minFresh.Valid && freshnessLifetime < currentAge+minFresh.Value {
-		responseIsFresh = false
-	}
-
-	if responseIsFresh {
-		return FreshnessFresh
-	}
-
-	// From https://www.rfc-editor.org/rfc/rfc9111#name-serving-stale-responses
-	//
-	// A "stale" response is one that either has explicit expiry information or is allowed to have heuristic expiry
-	// calculated, but is not fresh according to the calculations in Section 4.2.
-	if maxStale.Valid && maxStale.Value >= currentAge-freshnessLifetime {
-		return FreshnessStale
-	}
-
-	return FreshnessExpired
 }

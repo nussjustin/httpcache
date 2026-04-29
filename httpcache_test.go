@@ -1346,112 +1346,6 @@ func TestRequestDirectives_String(t *testing.T) {
 	}
 }
 
-func TestRequestMetadataFromRequest(t *testing.T) {
-	now := time.Now()
-	type args struct {
-		req http.Request
-		at  time.Time
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    httpcache.RequestMetadata
-		wantErr bool
-	}{
-		{
-			name: `empty values`,
-			want: httpcache.RequestMetadata{},
-		},
-		{
-			name: `with authorization header`,
-			args: args{
-				req: http.Request{
-					Method: http.MethodGet,
-					Header: http.Header{
-						"Authorization": []string{"Test"},
-					},
-				},
-				at: now,
-			},
-			want: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     http.MethodGet,
-				Time:       now,
-			},
-		},
-		{
-			name: `with empty authorization header`,
-			args: args{
-				req: http.Request{
-					Method: http.MethodGet,
-					Header: http.Header{
-						"Authorization": []string{""},
-					},
-				},
-				at: now,
-			},
-			want: httpcache.RequestMetadata{
-				Authorized: true,
-				Method:     http.MethodGet,
-				Time:       now,
-			},
-		},
-		{
-			name: `with cache-control`,
-			args: args{
-				req: http.Request{
-					Method: http.MethodGet,
-					Header: http.Header{
-						"Cache-Control": []string{"max-age=5, no-cache"},
-					},
-				},
-				at: now,
-			},
-			want: httpcache.RequestMetadata{
-				Directives: httpcache.RequestDirectives{
-					MaxAge:  OptValue(5 * time.Second),
-					NoCache: true,
-				},
-				Method: http.MethodGet,
-				Time:   now,
-			},
-		},
-		{
-			name: `with invalid cache-control`,
-			args: args{
-				req: http.Request{
-					Method: http.MethodGet,
-					Header: http.Header{
-						"Cache-Control": []string{"max-age=test, no-cache"},
-					},
-				},
-				at: now,
-			},
-			want: httpcache.RequestMetadata{
-				Directives: httpcache.RequestDirectives{
-					MaxAge:  OptValue(0 * time.Second),
-					NoCache: true,
-				},
-				Method: http.MethodGet,
-				Time:   now,
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.RequestMetadataFromRequest(&tt.args.req, tt.args.at)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("RequestMetadataFromRequest() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("RequestMetadataFromRequest() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
 func TestParseResponseDirectives(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1782,308 +1676,6 @@ func TestResponseDirectives_String(t *testing.T) {
 	}
 }
 
-func TestResponseMetadataFromResponse(t *testing.T) {
-	now := time.Now()
-
-	type args struct {
-		resp http.Response
-		at   time.Time
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    httpcache.ResponseMetadata
-		wantErr bool
-	}{
-		{
-			name:    `empty values`,
-			wantErr: true,
-		},
-		{
-			name: `minimal response`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-		},
-		{
-			name: `full response`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Age":           []string{"3"},
-						"Cache-Control": []string{"max-age=5"},
-						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-						"Expires":       []string{"Mon, 03 Jan 2006 15:04:05 GMT"},
-						"Vary":          []string{"Header-1", "header-2", "header-1", "*", " Header-3"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Age:  OptValue(3 * time.Second),
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(5 * time.Second),
-				},
-				Expires:    time.Date(2006, time.January, 3, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-				Vary:       []string{"*", "Header-1", "Header-2", "Header-3"},
-			},
-		},
-		{
-			name: `invalid age`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Age":  []string{"test"},
-						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-			wantErr: true,
-		},
-		{
-			name: `invalid cache-control`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Cache-Control": []string{"max-age=test, no-cache"},
-						"Date":          []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge:  OptValue(0 * time.Second),
-					NoCache: true,
-				},
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-			wantErr: true,
-		},
-		{
-			name: `invalid date`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Date": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-			wantErr: true,
-		},
-		{
-			name: `invalid expires`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-						"Expires": []string{"Monday, 02 Jan 2006 15:04:05 GMT"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-			wantErr: true,
-		},
-		{
-			name: `multiple expires`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Date": []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-						"Expires": []string{
-							"Mon, 02 Jan 2006 15:04:05 GMT",
-							"Mon, 03 Jan 2006 15:04:05 GMT",
-						},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-		},
-		// From https://www.rfc-editor.org/rfc/rfc9111#name-freshness
-		//
-		// Although all date formats are specified to be case-sensitive, a cache recipient SHOULD match the field
-		// value case-insensitively.
-		{
-			name: `case ignored for expires`,
-			args: args{
-				resp: http.Response{
-					Header: http.Header{
-						"Date":    []string{"Mon, 02 Jan 2006 15:04:05 GMT"},
-						"Expires": []string{"MON, 02 Jan 2006 15:04:05 gmt"},
-					},
-					StatusCode: http.StatusOK,
-				},
-				at: now,
-			},
-			want: httpcache.ResponseMetadata{
-				Date:       time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Expires:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				StatusCode: http.StatusOK,
-				Time:       now,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ResponseMetadataFromResponse(&tt.args.resp, tt.args.at)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ResponseMetadataFromResponse() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ResponseMetadataFromResponse() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestResponseMetadata_FreshnessLifetime(t *testing.T) {
-	tests := []struct {
-		name     string
-		metadata httpcache.ResponseMetadata
-		private  bool
-		want     time.Duration
-		wantOk   bool
-	}{
-		{
-			name:    `no s-maxage, no max-age, no expires`,
-			private: true,
-		},
-		{
-			name: `no s-maxage, no max-age, no expires, shared`,
-		},
-
-		{
-			name: `no s-maxage, no max-age, expires`,
-			metadata: httpcache.ResponseMetadata{
-				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			private: true,
-			want:    time.Minute,
-			wantOk:  true,
-		},
-		{
-			name: `no s-maxage, no max-age, expires, shared`,
-			metadata: httpcache.ResponseMetadata{
-				Date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			want:   time.Minute,
-			wantOk: true,
-		},
-
-		{
-			name: `no s-maxage, max-age, expires`,
-			metadata: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(5 * time.Second),
-				},
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			private: true,
-			want:    5 * time.Second,
-			wantOk:  true,
-		},
-		{
-			name: `no s-maxage, max-age, expires, shared`,
-			metadata: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge: OptValue(5 * time.Second),
-				},
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			want:   5 * time.Second,
-			wantOk: true,
-		},
-
-		{
-			name: `s-maxage, max-age, expires`,
-			metadata: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge:  OptValue(5 * time.Second),
-					SMaxAge: OptValue(10 * time.Second),
-				},
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			private: true,
-			want:    5 * time.Second,
-			wantOk:  true,
-		},
-		{
-			name: `s-maxage, max-age, expires, shared`,
-			metadata: httpcache.ResponseMetadata{
-				Date: time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				Directives: httpcache.ResponseDirectives{
-					MaxAge:  OptValue(5 * time.Second),
-					SMaxAge: OptValue(10 * time.Second),
-				},
-				Expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
-			},
-			want:   10 * time.Second,
-			wantOk: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, gotOk := tt.metadata.FreshnessLifetime(tt.private)
-			if got != tt.want {
-				t.Errorf("FreshnessLifetime() got = %v, want %v", got, tt.want)
-			}
-			if gotOk != tt.wantOk {
-				t.Errorf("FreshnessLifetime() gotOk = %v, want %v", gotOk, tt.wantOk)
-			}
-		})
-	}
-}
-
 func TestCalculateAge(t *testing.T) {
 	reqTime := time.Now()
 	respDate := reqTime.Add(1 * time.Second)
@@ -2091,9 +1683,11 @@ func TestCalculateAge(t *testing.T) {
 	now := reqTime.Add(3 * time.Second)
 
 	type args struct {
-		req  httpcache.RequestMetadata
-		resp httpcache.ResponseMetadata
-		now  time.Time
+		now      time.Time
+		reqTime  time.Time
+		respAge  httpcache.Opt[time.Duration]
+		respDate time.Time
+		respTime time.Time
 	}
 	tests := []struct {
 		name string
@@ -2103,37 +1697,35 @@ func TestCalculateAge(t *testing.T) {
 		{
 			name: `with explicit age`,
 			args: args{
-				req: httpcache.RequestMetadata{
-					Time: reqTime,
-				},
-				resp: httpcache.ResponseMetadata{
-					Age:  OptValue(10 * time.Second),
-					Date: respDate,
-					Time: respTime,
-				},
-				now: now,
+				now:      now,
+				reqTime:  reqTime,
+				respAge:  OptValue(10 * time.Second),
+				respDate: respDate,
+				respTime: respTime,
 			},
 			want: 13 * time.Second,
 		},
 		{
 			name: `without explicit age`,
 			args: args{
-				req: httpcache.RequestMetadata{
-					Time: reqTime,
-				},
-				resp: httpcache.ResponseMetadata{
-					Age:  OptValue(5 * time.Second),
-					Date: respDate,
-					Time: respTime,
-				},
-				now: now,
+				now:      now,
+				reqTime:  reqTime,
+				respAge:  OptValue(5 * time.Second),
+				respDate: respDate,
+				respTime: respTime,
 			},
 			want: 8 * time.Second,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := httpcache.CalculateAge(tt.args.req, tt.args.resp, tt.args.now); got != tt.want {
+			if got := httpcache.CalculateAge(
+				tt.args.now,
+				tt.args.reqTime,
+				tt.args.respAge,
+				tt.args.respDate,
+				tt.args.respTime,
+			); got != tt.want {
 				t.Errorf("CalculateAge() = %v, want %v", got, tt.want)
 			}
 		})
@@ -2230,6 +1822,115 @@ func TestCalculateFreshness(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := httpcache.CalculateFreshness(tt.args.currentAge, tt.args.freshnessLifetime, tt.args.minFresh, tt.args.maxAge, tt.args.maxStale); got != tt.want {
 				t.Errorf("CalculateFreshness() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCalculateFreshnessLifetime(t *testing.T) {
+	type args struct {
+		privateCache bool
+		date         time.Time
+		expires      time.Time
+		maxAge       httpcache.Opt[time.Duration]
+		sMaxAge      httpcache.Opt[time.Duration]
+	}
+	tests := []struct {
+		name   string
+		args   args
+		want   time.Duration
+		wantOk bool
+	}{
+		{
+			name: `no s-maxage, no max-age, no expires`,
+			args: args{
+				privateCache: true,
+			},
+		},
+		{
+			name: `no s-maxage, no max-age, no expires, shared`,
+		},
+
+		{
+			name: `no s-maxage, no max-age, expires`,
+			args: args{
+				privateCache: true,
+				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			want:   time.Minute,
+			wantOk: true,
+		},
+		{
+			name: `no s-maxage, no max-age, expires, shared`,
+			args: args{
+				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+			},
+			want:   time.Minute,
+			wantOk: true,
+		},
+
+		{
+			name: `no s-maxage, max-age, expires`,
+			args: args{
+				privateCache: true,
+				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				maxAge:       OptValue(5 * time.Second),
+			},
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+		{
+			name: `no s-maxage, max-age, expires, shared`,
+			args: args{
+				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				maxAge:  OptValue(5 * time.Second),
+			},
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+
+		{
+			name: `s-maxage, max-age, expires`,
+			args: args{
+				privateCache: true,
+				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				maxAge:       OptValue(5 * time.Second),
+				sMaxAge:      OptValue(10 * time.Second),
+			},
+			want:   5 * time.Second,
+			wantOk: true,
+		},
+		{
+			name: `s-maxage, max-age, expires, shared`,
+			args: args{
+				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				maxAge:  OptValue(5 * time.Second),
+				sMaxAge: OptValue(10 * time.Second),
+			},
+			want:   10 * time.Second,
+			wantOk: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotOk := httpcache.CalculateFreshnessLifetime(
+				tt.args.privateCache,
+				tt.args.date,
+				tt.args.expires,
+				tt.args.maxAge,
+				tt.args.sMaxAge,
+			)
+			if got != tt.want {
+				t.Errorf("FreshnessLifetime() got = %v, want %v", got, tt.want)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("FreshnessLifetime() gotOk = %v, want %v", gotOk, tt.wantOk)
 			}
 		})
 	}
