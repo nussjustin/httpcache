@@ -17,12 +17,6 @@ import (
 
 // Config defines characteristics of the cache based on which cacheability can be calculated.
 type Config struct {
-	// CacheableByExtension can be used to mark a response as cacheable even if it does not match any of the other
-	// criteria specified in RFC 9111.
-	//
-	// If nil, only the criteria from RFC 9111 is applied to determine cacheability.
-	CacheableByExtension func(RequestMetadata, ResponseMetadata) bool
-
 	// CanUnderstandResponseCode is used to check if a response with status code 206 or 304, or with must-understand cache
 	// directive should be cached.
 	//
@@ -137,7 +131,7 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	// if the cache is shared: an s-maxage response directive (see Section 5.2.2.10);
 	case !c.Private && resp.Directives.SMaxAge.Valid:
 	// a cache extension that allows it to be cached (see Section 5.2.3); or
-	case c.cacheableByExtension(req, resp):
+	case false: // not supported
 	// a status code that is defined as heuristically cacheable (see Section 4.2.2).
 	case c.isHeuristicallyCacheableStatusCode(resp.StatusCode):
 	default:
@@ -152,14 +146,6 @@ func (c Config) CanStore(req RequestMetadata, resp ResponseMetadata) bool {
 	}
 
 	return true
-}
-
-func (c Config) cacheableByExtension(req RequestMetadata, resp ResponseMetadata) bool {
-	if c.CacheableByExtension == nil {
-		return false
-	}
-
-	return c.CacheableByExtension(req, resp)
 }
 
 func (c Config) canUnderstandResponseCode(code int) bool {

@@ -504,49 +504,6 @@ func TestConfig_CanStore(t *testing.T) {
 		},
 
 		{
-			name: `extension allows caching`,
-			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
-					return true
-				},
-			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				StatusCode: http.StatusCreated, // not heuristically cacheable
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `extension does not allow caching`,
-			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
-					return false
-				},
-			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				StatusCode: http.StatusCreated, // not heuristically cacheable
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `extension does not allow caching, but caching is allowed otherwise`,
-			config: httpcache.Config{
-				CacheableByExtension: func(req httpcache.RequestMetadata, resp httpcache.ResponseMetadata) bool {
-					return false
-				},
-			},
-			req: httpcache.RequestMetadata{Method: "GET"},
-			resp: httpcache.ResponseMetadata{
-				StatusCode: http.StatusOK, // heuristically cacheable
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
 			name:   `request no-store`,
 			config: httpcache.Config{},
 			req: httpcache.RequestMetadata{
