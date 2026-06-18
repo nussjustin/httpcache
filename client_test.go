@@ -766,7 +766,7 @@ func TestClient_Do(t *testing.T) {
 					resp, err := (&httpcache.Client{
 						Config: tt.config,
 						Store:  store,
-						Underlying: &http.Client{
+						HTTPClient: &http.Client{
 							Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 								if got, want := req.Method, tx.wantReq.Method; got != want {
 									t.Errorf("Tx %d: Do() Request.Method = %s, want %s", i, got, want)

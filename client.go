@@ -19,13 +19,20 @@ type Client struct {
 	// Config is used to validate whether responses can be cached and to normalize them before storing.
 	Config Config
 
-	// Store is used to store and retrieve responses.
-	Store Store
-
-	// Underlying is used for sending requests that cannot be served from the cache.
+	// HTTPClient is used for sending requests that cannot be served from the cache.
 	//
 	// If nil, [http.DefaultClient] is used.
-	Underlying *http.Client
+	HTTPClient HTTPClient
+
+	// Store is used to store and retrieve responses.
+	Store Store
+}
+
+// HTTPClient is the interface for types that can be used to executed requests.
+//
+// It is implemented by [http.DefaultClient].
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 func cloneHeader(h http.Header) http.Header {
@@ -71,7 +78,7 @@ func cloneResponse(resp *http.Response) (*http.Response, error) {
 // response has the Last-Modified and/or ETag header set. Otherwise, the response will be sent as if no cached response
 // was found.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	client := c.Underlying
+	client := c.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
