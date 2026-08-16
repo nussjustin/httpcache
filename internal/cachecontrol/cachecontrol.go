@@ -3,8 +3,12 @@
 package cachecontrol
 
 import (
+	"fmt"
 	"iter"
+	"strconv"
 	"strings"
+
+	"github.com/nussjustin/httpsfv"
 )
 
 // Directive represents a single Cache-Control directive with optional value.
@@ -24,10 +28,12 @@ type Directive struct {
 // The parsing uses [Tokenize] to extract tokens from the given string and tries its best to form directives even from
 // non RFC9111 compliant inputs.
 //
-// Notably a directive like `directive1=value "with" space,directive2` will _correctly_ parse the first directive with
+// Notably, a directive like `directive1=value "with" space,directive2` will _correctly_ parse the first directive with
 // the value `value "with" space`.
-func Parse(s string) iter.Seq[Directive] {
-	return func(yield func(Directive) bool) {
+//
+// The error returned by the sequence is always nil.
+func Parse(s string) iter.Seq2[Directive, error] {
+	return func(yield func(Directive, error) bool) {
 		const (
 			stateName = iota
 			stateValue
@@ -49,7 +55,7 @@ func Parse(s string) iter.Seq[Directive] {
 						break
 					}
 
-					if !yield(Directive{Name: name}) {
+					if !yield(Directive{Name: name}, nil) {
 						return
 					}
 
@@ -70,7 +76,7 @@ func Parse(s string) iter.Seq[Directive] {
 			case stateValue:
 				switch token.Type {
 				case TokenTypeComma:
-					if !yield(Directive{Name: name, Value: value, HasValue: true}) {
+					if !yield(Directive{Name: name, Value: value, HasValue: true}, nil) {
 						return
 					}
 
@@ -103,7 +109,61 @@ func Parse(s string) iter.Seq[Directive] {
 			return
 		}
 
-		yield(Directive{Name: name, Value: value, HasValue: state == stateValue})
+		yield(Directive{Name: name, Value: value, HasValue: state == stateValue}, nil)
+	}
+}
+
+// ParseTargeted is like [Parse], but parses the header as a structured field, as defined in RFC9651 and as
+// required when parsing a targeted HTTP cache control header as specified by RFC9213.
+//
+// Unlike [Parse], this can yield non-nil errors.
+func ParseTargeted(s string) iter.Seq2[Directive, error] {
+	return func(yield func(Directive, error) bool) {
+		d, err := httpsfv.Parse[httpsfv.Dictionary](s)
+		if err != nil {
+			yield(Directive{}, err)
+			return
+		}
+
+		for k, v := range d.All() {
+			if v.Type() == httpsfv.ItemOrInnerListTypeInnerList {
+				if !yield(Directive{}, fmt.Errorf("directive %q must be an item", k)) {
+					return
+				}
+
+				continue
+			}
+
+			i := v.Item()
+
+			d := Directive{Name: k}
+
+			switch i.Type() {
+			case httpsfv.BareItemTypeBoolean:
+				if i.Boolean() {
+					break
+				}
+
+				// Treat a false as not being set
+				continue
+			case httpsfv.BareItemTypeInteger:
+				d.Value, d.HasValue = strconv.FormatInt(i.Integer(), 10), true
+			case httpsfv.BareItemTypeString:
+				d.Value, d.HasValue = i.String(), true
+			case httpsfv.BareItemTypeToken:
+				d.Value, d.HasValue = i.Token(), true
+			default:
+				if !yield(Directive{}, fmt.Errorf("directive %q has unexpected type %s", k, i.Type())) {
+					return
+				}
+
+				continue
+			}
+
+			if !yield(d, nil) {
+				return
+			}
+		}
 	}
 }
 

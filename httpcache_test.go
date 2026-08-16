@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/nussjustin/httpcache"
+	"github.com/nussjustin/httpsfv"
 )
 
 func TestConfig_AllowsCachedResponseFor(t *testing.T) {
@@ -1276,11 +1277,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				t.Errorf("ParseRequestDirectives() error = %v, want nil", err)
 			}
 			if len(tt.wantErr) > 0 {
-				var gotErrs []string
-
-				for _, gotErr := range err.(interface{ Unwrap() []error }).Unwrap() {
-					gotErrs = append(gotErrs, gotErr.Error())
-				}
+				gotErrs := errorStrings(err)
 
 				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
 					t.Errorf("ParseRequestDirectives() error mismatch (-want +got):\n%s", diff)
@@ -1294,6 +1291,228 @@ func BenchmarkParseRequestDirectives(b *testing.B) {
 	for b.Loop() {
 		_, _ = httpcache.ParseRequestDirectives(`max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test"`)
 	}
+}
+
+func TestParseTargetedRequestDirectives(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    httpcache.RequestDirectives
+		wantErr []string
+	}{
+		{
+			name: `empty`,
+		},
+		{
+			name: `minimal`,
+			in:   `no-cache`,
+			want: httpcache.RequestDirectives{
+				NoCache: true,
+			},
+		},
+		{
+			name: `full`,
+			in:   `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached`,
+			want: httpcache.RequestDirectives{
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
+				NoCache:      true,
+				NoStore:      true,
+				NoTransform:  true,
+				OnlyIfCached: true,
+			},
+		},
+		{
+			name: `full with extensions`,
+			in:   `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test"`,
+			want: httpcache.RequestDirectives{
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
+				NoCache:      true,
+				NoStore:      true,
+				NoTransform:  true,
+				OnlyIfCached: true,
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test")},
+				},
+			},
+		},
+		{
+			name: `extensions only`,
+			in:   `extra, extra-with-value="test"`,
+			want: httpcache.RequestDirectives{
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test")},
+				},
+			},
+		},
+		{
+			name:    `case-insensitive`,
+			in:      `MAX-AGE=100, MAX-STALE=200, MIN-FRESH=300, NO-CACHE, NO-STORE, NO-TRANSFORM, ONLY-IF-CACHED`,
+			wantErr: []string{httpsfv.ErrInvalidKey.Error()},
+		},
+		{
+			name: `duplicates`,
+			in: `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test", ` +
+				`max-age=150, max-stale=250, min-fresh=350, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test2"`,
+			want: httpcache.RequestDirectives{
+				MaxAge:       OptValue(150 * time.Second),
+				MaxStale:     OptValue(250 * time.Second),
+				MinFresh:     OptValue(350 * time.Second),
+				NoCache:      true,
+				NoStore:      true,
+				NoTransform:  true,
+				OnlyIfCached: true,
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test2")},
+				},
+			},
+		},
+		{
+			name: `duplicates with same max-/min- values`,
+			in: `max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test", ` +
+				`max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test2"`,
+			want: httpcache.RequestDirectives{
+				MaxAge:       OptValue(100 * time.Second),
+				MaxStale:     OptValue(200 * time.Second),
+				MinFresh:     OptValue(300 * time.Second),
+				NoCache:      true,
+				NoStore:      true,
+				NoTransform:  true,
+				OnlyIfCached: true,
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test2")},
+				},
+			},
+		},
+		{
+			name: `invalid max-age`,
+			in:   `no-cache, max-age=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
+				NoCache: true,
+				NoStore: true,
+			},
+			wantErr: []string{
+				"invalid value for max-age",
+			},
+		},
+		{
+			name: `invalid second max-age`,
+			in:   `no-cache, max-age=100, max-age=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
+				NoCache: true,
+				NoStore: true,
+			},
+			wantErr: []string{
+				"invalid value for max-age",
+			},
+		},
+		{
+			name: `invalid max-stale`,
+			in:   `no-cache, max-stale=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MaxStale: OptValue(time.Duration(0)),
+				NoCache:  true,
+				NoStore:  true,
+			},
+			wantErr: []string{
+				"invalid value for max-stale",
+			},
+		},
+		{
+			name: `invalid second max-stale`,
+			in:   `no-cache, max-stale=200, max-stale=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MaxStale: OptValue(time.Duration(0)),
+				NoCache:  true,
+				NoStore:  true,
+			},
+			wantErr: []string{
+				"invalid value for max-stale",
+			},
+		},
+		{
+			name: `invalid min-fresh`,
+			in:   `no-cache, min-fresh=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MinFresh: OptValue(time.Duration(math.MaxInt64)),
+				NoCache:  true,
+				NoStore:  true,
+			},
+			wantErr: []string{
+				"invalid value for min-fresh",
+			},
+		},
+		{
+			name: `invalid second min-fresh`,
+			in:   `no-cache, min-fresh=300, min-fresh=test, no-store`,
+			want: httpcache.RequestDirectives{
+				MinFresh: OptValue(time.Duration(math.MaxInt64)),
+				NoCache:  true,
+				NoStore:  true,
+			},
+			wantErr: []string{
+				"invalid value for min-fresh",
+			},
+		},
+		{
+			name: `invalid quoted value`,
+			in:   `no-cache, extra-with-value="test, no-store`,
+			wantErr: []string{
+				"invalid item: invalid bare item: invalid string: missing closing quote",
+			},
+		},
+		{
+			name: `value-less directive with value`,
+			in:   `no-cache=value, no-store="value with spaces"`,
+			want: httpcache.RequestDirectives{
+				NoCache: true,
+				NoStore: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseTargetedRequestDirectives(tt.in)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("ParseTargetedRequestDirectives() mismatch (-want +got):\n%s", diff)
+			}
+			if len(tt.wantErr) == 0 && err != nil {
+				t.Errorf("ParseTargetedRequestDirectives() error = %v, want nil", err)
+			}
+			if len(tt.wantErr) > 0 {
+				gotErrs := errorStrings(err)
+
+				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
+					t.Errorf("ParseTargetedRequestDirectives() error mismatch (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
+
+func errorStrings(err error) []string {
+	uw, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []string{err.Error()}
+	}
+
+	var gotErrs []string
+
+	for _, gotErr := range uw.Unwrap() {
+		gotErrs = append(gotErrs, gotErr.Error())
+	}
+
+	return gotErrs
 }
 
 func TestRequestDirectives_String(t *testing.T) {
@@ -1581,6 +1800,213 @@ func TestParseResponseDirectives(t *testing.T) {
 func BenchmarkParseResponseDirectives(b *testing.B) {
 	for b.Loop() {
 		_, _ = httpcache.ParseResponseDirectives(`max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200`)
+	}
+}
+
+func TestParseTargetedResponseDirectives(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    httpcache.ResponseDirectives
+		wantErr []string
+	}{
+		{
+			name: `empty`,
+		},
+		{
+			name: `minimal`,
+			in:   `no-cache`,
+			want: httpcache.ResponseDirectives{
+				NoCache: true,
+			},
+		},
+		{
+			name: `full`,
+			in:   `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:          OptValue(100 * time.Second),
+				MustRevalidate:  true,
+				MustUnderstand:  true,
+				NoCache:         true,
+				NoCacheHeaders:  []string{"Header-1", "Header-2"},
+				NoStore:         true,
+				NoTransform:     true,
+				Private:         true,
+				PrivateHeaders:  []string{"Header-3", "Header-4"},
+				ProxyRevalidate: true,
+				Public:          true,
+				SMaxAge:         OptValue(200 * time.Second),
+			},
+		},
+		{
+			name: `full with extensions`,
+			in:   `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test"`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:          OptValue(100 * time.Second),
+				MustRevalidate:  true,
+				MustUnderstand:  true,
+				NoCache:         true,
+				NoCacheHeaders:  []string{"Header-1", "Header-2"},
+				NoStore:         true,
+				NoTransform:     true,
+				Private:         true,
+				PrivateHeaders:  []string{"Header-3", "Header-4"},
+				ProxyRevalidate: true,
+				Public:          true,
+				SMaxAge:         OptValue(200 * time.Second),
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test")},
+				},
+			},
+		},
+		{
+			name: `extensions only`,
+			in:   `extra, extra-with-value="test"`,
+			want: httpcache.ResponseDirectives{
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test")},
+				},
+			},
+		},
+		{
+			name:    `case-insensitive`,
+			in:      `MAX-AGE=100, MUST-REVALIDATE, MUST-UNDERSTAND, NO-CACHE="HEADER-1 HEADER-2", NO-STORE, NO-TRANSFORM, PRIVATE="HEADER-3 HEADER-4", PROXY-REVALIDATE, PUBLIC, S-MAXAGE=200`,
+			wantErr: []string{httpsfv.ErrInvalidKey.Error()},
+		},
+		{
+			name: `duplicates`,
+			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
+				`max-age=150, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=250, extra, extra-with-value="test2"`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:          OptValue(150 * time.Second),
+				MustRevalidate:  true,
+				MustUnderstand:  true,
+				NoCache:         true,
+				NoCacheHeaders:  []string{"Header-5", "Header-6"},
+				NoStore:         true,
+				NoTransform:     true,
+				Private:         true,
+				PrivateHeaders:  []string{"Header-7", "Header-8"},
+				ProxyRevalidate: true,
+				Public:          true,
+				SMaxAge:         OptValue(250 * time.Second),
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test2")},
+				},
+			},
+		},
+		{
+			name: `duplicates duplicates with same max-/min- values`,
+			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
+				`max-age=100, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test2"`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:          OptValue(100 * time.Second),
+				MustRevalidate:  true,
+				MustUnderstand:  true,
+				NoCache:         true,
+				NoCacheHeaders:  []string{"Header-5", "Header-6"},
+				NoStore:         true,
+				NoTransform:     true,
+				Private:         true,
+				PrivateHeaders:  []string{"Header-7", "Header-8"},
+				ProxyRevalidate: true,
+				Public:          true,
+				SMaxAge:         OptValue(200 * time.Second),
+				Extensions: []httpcache.ExtensionDirective{
+					{Name: "extra"},
+					{Name: "extra-with-value", Value: OptValue("test2")},
+				},
+			},
+		},
+		{
+			name: `invalid max-age`,
+			in:   `no-cache, max-age=test, no-store`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
+				NoCache: true,
+				NoStore: true,
+			},
+			wantErr: []string{
+				"invalid value for max-age",
+			},
+		},
+		{
+			name: `invalid second max-age`,
+			in:   `no-cache, max-age=100, max-age=test, no-store`,
+			want: httpcache.ResponseDirectives{
+				MaxAge:  OptValue(time.Duration(0)),
+				NoCache: true,
+				NoStore: true,
+			},
+			wantErr: []string{
+				"invalid value for max-age",
+			},
+		},
+		{
+			name: `invalid s-maxage`,
+			in:   `no-cache, s-maxage=test, no-store`,
+			want: httpcache.ResponseDirectives{
+				NoCache: true,
+				NoStore: true,
+				SMaxAge: OptValue(time.Duration(0)),
+			},
+			wantErr: []string{
+				"invalid value for s-maxage",
+			},
+		},
+		{
+			name: `invalid second s-maxage`,
+			in:   `no-cache, s-maxage=200, s-maxage=test, no-store`,
+			want: httpcache.ResponseDirectives{
+				NoCache: true,
+				NoStore: true,
+				SMaxAge: OptValue(time.Duration(0)),
+			},
+			wantErr: []string{
+				"invalid value for s-maxage",
+			},
+		},
+		{
+			name: `invalid quoted value`,
+			in:   `no-cache, extra-with-value="test, no-store`,
+			wantErr: []string{
+				"invalid item: invalid bare item: invalid string: missing closing quote",
+			},
+		},
+		{
+			name: `value-less directive with value`,
+			in:   `must-revalidate=value, must-understand="value with spaces"`,
+			want: httpcache.ResponseDirectives{
+				MustRevalidate: true,
+				MustUnderstand: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseTargetedResponseDirectives(tt.in)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("ParseTargetedResponseDirectives() mismatch (-want +got):\n%s", diff)
+			}
+			if len(tt.wantErr) == 0 && err != nil {
+				t.Errorf("ParseTargetedResponseDirectives() error = %v, want nil", err)
+			}
+			if len(tt.wantErr) > 0 {
+				var gotErrs []string
+
+				for _, gotErr := range err.(interface{ Unwrap() []error }).Unwrap() {
+					gotErrs = append(gotErrs, gotErr.Error())
+				}
+
+				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
+					t.Errorf("ParseTargetedResponseDirectives() error mismatch (-want +got):\n%s", diff)
+				}
+			}
+		})
 	}
 }
 

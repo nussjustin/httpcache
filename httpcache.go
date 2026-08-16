@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"errors"
+	"iter"
 	"math"
 	"net/http"
 	"slices"
@@ -645,15 +646,37 @@ var (
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Invalid or conflicting values for max-age or max-stale are considered an error and the corresponding value will be
+// Invalid or conflicting values for max-age or max-stale are considered an error, and the corresponding value will be
 // set to 0, which will cause any response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 //
 // Similarly, an invalid or conflicting value for min-fresh will cause the value to be set to the maximum duration.
 func ParseRequestDirectives(header string) (RequestDirectives, error) {
+	return parseRequestDirectives(header, false)
+}
+
+// ParseTargetedRequestDirectives is like [ParseRequestDirectives], but parses a targeted Cache-Control header as
+// specified in RFC9213, treating the header as a structured field dictionary.
+func ParseTargetedRequestDirectives(header string) (RequestDirectives, error) {
+	return parseRequestDirectives(header, true)
+}
+
+func parseRequestDirectives(header string, targeted bool) (RequestDirectives, error) {
+	var seq iter.Seq2[cachecontrol.Directive, error]
+	if targeted {
+		seq = cachecontrol.ParseTargeted(header)
+	} else {
+		seq = cachecontrol.Parse(header)
+	}
+
 	var c RequestDirectives
 	var errs []error
 
-	for d := range cachecontrol.Parse(header) {
+	for d, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
 		name := strings.ToLower(d.Name)
 
 		switch name {
@@ -837,13 +860,35 @@ type ResponseDirectives struct {
 // Any errors during parsing are collected and returned as one using [errors.Join] together with the struct containing
 // all parseable data.
 //
-// Invalid or conflicting values for max-age or smax-age are considered an error and the corresponding value will be set
+// Invalid or conflicting values for max-age or smax-age are considered an error, and the corresponding value will be set
 // to 0, which will cause the response to be considered stale, as suggested by RFC 9111, Section 4.2.1.
 func ParseResponseDirectives(header string) (ResponseDirectives, error) {
+	return parseResponseDirectives(header, false)
+}
+
+// ParseTargetedResponseDirectives is like [ParseResponseDirectives], but parses a targeted Cache-Control header as
+// specified in RFC9213, treating the header as a structured field dictionary.
+func ParseTargetedResponseDirectives(header string) (ResponseDirectives, error) {
+	return parseResponseDirectives(header, true)
+}
+
+func parseResponseDirectives(header string, targeted bool) (ResponseDirectives, error) {
+	var seq iter.Seq2[cachecontrol.Directive, error]
+	if targeted {
+		seq = cachecontrol.ParseTargeted(header)
+	} else {
+		seq = cachecontrol.Parse(header)
+	}
+
 	var c ResponseDirectives
 	var errs []error
 
-	for d := range cachecontrol.Parse(header) {
+	for d, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+
 		name := strings.ToLower(d.Name)
 
 		switch name {

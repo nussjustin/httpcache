@@ -1,10 +1,12 @@
 package cachecontrol_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/nussjustin/httpcache/internal/cachecontrol"
+	"github.com/nussjustin/httpsfv"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -181,7 +183,14 @@ func TestParse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := slices.Collect(cachecontrol.Parse(tt.in))
+			var got []cachecontrol.Directive
+
+			for d, err := range cachecontrol.Parse(tt.in) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, d)
+			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Parse() mismatch (-want +git):\n%s", diff)
@@ -218,6 +227,193 @@ func FuzzParse(f *testing.F) {
 		for range cachecontrol.Parse(input) {
 		}
 	})
+}
+
+func TestParseTargeted(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    []cachecontrol.Directive
+		wantErr error
+	}{
+		{
+			name: `empty`,
+			in:   ``,
+		},
+		{
+			name:    `two empty`,
+			in:      `,`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `three empty`,
+			in:      `,,`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `lone equal sign`,
+			in:      `=`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `double equal signs`,
+			in:      `==`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name: `single directive`,
+			in:   `private`,
+			want: []cachecontrol.Directive{
+				{Name: `private`},
+			},
+		},
+		{
+			name:    `broken quoted string`,
+			in:      `"private`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `quoted directive`,
+			in:      `"private"`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `directive followed by empty`,
+			in:      `private,`,
+			wantErr: httpsfv.ErrInvalidDictionary,
+		},
+		{
+			name:    `empty followed by directive`,
+			in:      `,private`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name:    `directive between empty`,
+			in:      `,private,`,
+			wantErr: httpsfv.ErrInvalidKey,
+		},
+		{
+			name: `multiple directives`,
+			in:   `private, no-cache, no-store`,
+			want: []cachecontrol.Directive{
+				{Name: `private`},
+				{Name: `no-cache`},
+				{Name: `no-store`},
+			},
+		},
+		{
+			name:    `multiple directives, last with empty value`,
+			in:      `private, no-cache, no-store=`,
+			wantErr: httpsfv.ErrInvalidBareItem,
+		},
+		{
+			name: `multiple directives, last with empty quoted value`,
+			in:   `private, no-cache, no-store=""`,
+			want: []cachecontrol.Directive{
+				{Name: `private`},
+				{Name: `no-cache`},
+				{Name: `no-store`, HasValue: true},
+			},
+		},
+		{
+			name:    `unquoted value with spaces`,
+			in:      `private, no-cache, no-store=header1 header2 header3`,
+			wantErr: httpsfv.ErrInvalidDictionary,
+		},
+		{
+			name:    `broken quoted string value`,
+			in:      `private, no-cache, no-store="header1 header2 header3`,
+			wantErr: httpsfv.ErrInvalidItem,
+		},
+		{
+			name: `quoted string value`,
+			in:   `private, no-cache, no-store="header1 header2 header3"`,
+			want: []cachecontrol.Directive{
+				{Name: `private`},
+				{Name: `no-cache`},
+				{Name: `no-store`, Value: `header1 header2 header3`, HasValue: true},
+			},
+		},
+		{
+			name: `spaces around directives`,
+			in:   ` private , no-cache , no-store="header1 header2 header3" `,
+			want: []cachecontrol.Directive{
+				{Name: `private`},
+				{Name: `no-cache`},
+				{Name: `no-store`, Value: `header1 header2 header3`, HasValue: true},
+			},
+		},
+		{
+			name:    `broken quoted string value with trailing space`,
+			in:      `directive1, directive2="missing ending quote `,
+			wantErr: httpsfv.ErrInvalidString,
+		},
+		{
+			name:    `broken quoted string value with more directives`,
+			in:      `directive1, directive2="missing ending quote, directive3=value`,
+			wantErr: httpsfv.ErrInvalidString,
+		},
+		{
+			name:    `directive name with spaces`,
+			in:      `no store`,
+			wantErr: httpsfv.ErrInvalidDictionary,
+		},
+		{
+			name:    `directive name with spaces and value`,
+			in:      `no store=header1`,
+			wantErr: httpsfv.ErrInvalidDictionary,
+		},
+
+		{
+			name: `explicit boolean false`,
+			in:   `no-store=?0`,
+		},
+		{
+			name: `explicit boolean true`,
+			in:   `no-store=?1`,
+			want: []cachecontrol.Directive{
+				{Name: `no-store`},
+			},
+		},
+		{
+			name: `integer`,
+			in:   `max-age=300`,
+			want: []cachecontrol.Directive{
+				{Name: `max-age`, Value: "300", HasValue: true},
+			},
+		},
+		{
+			name:    `inner list`,
+			in:      `no-store=("header1" "header2" "header3")`,
+			wantErr: errors.New(`directive "no-store" must be an item`),
+		},
+		{
+			name:    `non-token, non-string item`,
+			in:      `no-store=%"hello"`,
+			wantErr: errors.New(`directive "no-store" has unexpected type DisplayString`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []cachecontrol.Directive
+
+			for d, err := range cachecontrol.ParseTargeted(tt.in) {
+				if err != nil {
+					if !errors.Is(err, tt.wantErr) && (err == nil || tt.wantErr == nil || err.Error() != tt.wantErr.Error()) {
+						t.Errorf("ParseTargeted() error = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+
+				got = append(got, d)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("ParseTargeted() mismatch (-want +git):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestTokenize(t *testing.T) {
