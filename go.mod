@@ -4,5 +4,5 @@ go 1.26
 
 require (
 	github.com/google/go-cmp v0.7.0
-	github.com/nussjustin/httpsfv v0.0.0-20260809040027-aa97a9893f63
+	github.com/nussjustin/httpsfv v0.0.0-20260821181854-2d567a24f86f
 )

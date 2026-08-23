@@ -30,15 +30,15 @@ type URLVariationConfig struct {
 	VaryParamsWildcard bool
 }
 
-// The default URL variation config is a URL variation config whose no-vary params is an empty list, vary params is
+// DefaultURLVariationConfig is a URL variation config whose no-vary params is an empty list, vary params is
 // wildcard, and vary on key order is true.
-var defaultURLVariationConfig = URLVariationConfig{
+var DefaultURLVariationConfig = URLVariationConfig{
 	VaryOnKeyOrder:     true,
 	VaryParamsWildcard: true,
 }
 
 func isDefaultURLVariationConfig(u URLVariationConfig) bool {
-	// See comment on defaultURLVariationConfig.
+	// See comment on DefaultURLVariationConfig.
 	return len(u.NoVaryParams) == 0 && !u.NoVaryParamsWildcard && u.VaryParamsWildcard && u.VaryOnKeyOrder
 }
 
@@ -50,8 +50,7 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 	//
 	// 1. If value is null, then return the default URL variation config.
 	if err != nil {
-		// TODO: Test
-		return defaultURLVariationConfig, err
+		return DefaultURLVariationConfig, err
 	}
 
 	// 2. Let result be a new URL variation config.
@@ -61,26 +60,22 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 	result.VaryOnKeyOrder = true
 
 	// 4. If value["key-order"] exists:
-	// TODO: Test
 	if v, ok := value.Get("key-order"); ok {
 		// 1. Let keyOrderValue be the item_or_inner_list component of the tuple value["key-order"] (ignoring any parameters).
 		keyOrderValue := v
 
 		// 2. If keyOrderValue is not a boolean, then return the default URL variation config.
 		if keyOrderValue.Type() != httpsfv.ItemOrInnerListTypeItem {
-			// TODO: Test
-			return defaultURLVariationConfig, errors.New("key-order must be a boolean")
+			return DefaultURLVariationConfig, errors.New("key-order must be a boolean")
 		}
 
 		keyOrderValueItem := keyOrderValue.Item()
 
 		if keyOrderValueItem.Type() != httpsfv.BareItemTypeBoolean {
-			// TODO: Test
-			return defaultURLVariationConfig, errors.New("key-order must be a boolean")
+			return DefaultURLVariationConfig, errors.New("key-order must be a boolean")
 		}
 
 		// 3. Set result's vary on key order to the boolean negation of keyOrderValue.
-		// TODO: Test
 		result.VaryOnKeyOrder = !keyOrderValueItem.Boolean()
 	}
 
@@ -90,8 +85,7 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 	switch {
 	// 5. If both value["params"] and value["except"] exist, then return the default URL variation config.
 	case paramsOk && exceptOk:
-		// TODO: Test
-		return defaultURLVariationConfig, errors.New("except and params set at the same time")
+		return DefaultURLVariationConfig, errors.New("except and params set at the same time")
 	// 6. If neither value["params"] nor value["except"] exists:
 	case !paramsOk && !exceptOk:
 		// 1. Set result's no-vary params to an empty list.
@@ -105,24 +99,24 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 		_ = paramsValue
 
 		// 2. If paramsValue is not an inner list, then return the default URL variation config.
-		// TODO: Test
 		if paramsValue.Type() != httpsfv.ItemOrInnerListTypeInnerList {
-			return defaultURLVariationConfig, errors.New("params must be an inner-list")
+			return DefaultURLVariationConfig, errors.New("params must be an inner-list")
 		}
 
 		// 3. Let paramsList be a list containing the bare_item component of each tuple in paramsValue (ignoring any parameters).
 		paramsList := paramsValue.InnerList().Members
 
-		keys := make([]string, len(paramsList))
+		var keys []string
+		if len(paramsList) > 0 {
+			keys = make([]string, len(paramsList))
+		}
 
 		// 4. If any item in paramsList is not a string, then return the default URL variation config.
 		for i, param := range paramsList {
 			if param.Type() != httpsfv.BareItemTypeString {
-				// TODO: Test
-				return defaultURLVariationConfig, errors.New("params must all be strings")
+				return DefaultURLVariationConfig, errors.New("params must all be strings")
 			}
 
-			// TODO: Test
 			keys[i] = parseNoVaryKey(param.String())
 		}
 
@@ -130,7 +124,6 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 		result.NoVaryParams = keys
 
 		// 6. Set result's vary params to wildcard.
-		// TODO: Test
 		result.VaryParamsWildcard = true
 	// 8. Otherwise, if value["except"] exists:
 	default:
@@ -138,24 +131,24 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 		_ = exceptValue
 
 		// 2. If exceptValue is not an inner list, then return the default URL variation config.
-		// TODO: Test
 		if exceptValue.Type() != httpsfv.ItemOrInnerListTypeInnerList {
-			return defaultURLVariationConfig, errors.New("except must be an inner-list")
+			return DefaultURLVariationConfig, errors.New("except must be an inner-list")
 		}
 
 		// 3. Let exceptList be a list containing the bare_item component of each tuple in exceptValue (ignoring any parameters).
 		exceptList := exceptValue.InnerList().Members
 
-		keys := make([]string, len(exceptList))
+		var keys []string
+		if len(exceptList) > 0 {
+			keys = make([]string, len(exceptList))
+		}
 
 		// 4. If any item in exceptList is not a string, then return the default URL variation config.
 		for i, except := range exceptList {
 			if except.Type() != httpsfv.BareItemTypeString {
-				// TODO: Test
-				return defaultURLVariationConfig, errors.New("except must all be strings")
+				return DefaultURLVariationConfig, errors.New("except must all be strings")
 			}
 
-			// TODO: Test
 			keys[i] = parseNoVaryKey(except.String())
 		}
 
@@ -163,7 +156,6 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 		result.VaryParams = keys
 
 		// 6. Set result's no-vary params to wildcard.
-		// TODO: Test
 		result.NoVaryParamsWildcard = true
 	}
 
@@ -208,12 +200,7 @@ func parseNoVaryKey(keyString string) string {
 	keyBytes = percentDecode(keyBytes)
 
 	// 4. Let keyStringDecoded be the UTF-8 decoding without BOM [WHATWG-ENCODING] of keyBytesDecoded.
-	keyStringDecoded := string(keyBytes)
-
-	// TODO: Test
-	if r, sz := utf8.DecodeRuneInString(keyStringDecoded); r == '\uFEFF' {
-		keyStringDecoded = keyStringDecoded[sz:]
-	}
+	keyStringDecoded := utf8DecodeWithoutBOMString(string(keyBytes))
 
 	// 5. Return keyStringDecoded.
 	return keyStringDecoded
@@ -251,6 +238,10 @@ func (ps urlDecodedPairs) only(params []string) urlDecodedPairs {
 }
 
 func parseURLEncoded(input string) urlDecodedPairs {
+	if input == "" {
+		return nil
+	}
+
 	// From https://url.spec.whatwg.org/#concept-urlencoded-parser
 	//
 	// 1. Let sequences be the result of splitting input on 0x26 (&).
@@ -263,7 +254,6 @@ func parseURLEncoded(input string) urlDecodedPairs {
 	for bytes_ := range sequences {
 		// 1. If bytes is the empty byte sequence, then continue.
 		if bytes_ == "" {
-			// TODO: Test
 			continue
 		}
 
@@ -277,11 +267,9 @@ func parseURLEncoded(input string) urlDecodedPairs {
 		//    If 0x3D (=) is the first byte, then name will be the empty byte sequence. If it is the last, then value
 		//    will be the empty byte sequence.
 		case equalsIdx != -1:
-			// TODO: Test
 			name, value = bytes_[:equalsIdx], bytes_[equalsIdx+1:]
 		// 3. Otherwise, let name have the value of bytes and let value be the empty byte sequence.
 		default:
-			// TODO: Test
 			name = bytes_
 		}
 
@@ -291,8 +279,8 @@ func parseURLEncoded(input string) urlDecodedPairs {
 
 		// 5. Let nameString and valueString be the result of running UTF-8 decode without BOM on the percent-decoding
 		//    of name and value, respectively.
-		nameString := percentDecodeString(name)
-		valueString := percentDecodeString(value)
+		nameString := utf8DecodeWithoutBOMString(percentDecodeString(name))
+		valueString := utf8DecodeWithoutBOMString(percentDecodeString(value))
 
 		// 6. Append (nameString, valueString) to output.
 		output = append(output, urlDecodedPair{nameString, valueString})
@@ -315,7 +303,6 @@ func percentDecode(input []byte) []byte {
 		switch {
 		// 1. If byte is not 0x25 (%), then append byte to output.
 		case byte_ != '%':
-			// TODO: Test
 			output = append(output, byte_)
 		// 2. Otherwise, if byte is 0x25 (%) and the next two bytes after byte in input are not in the ranges 0x30 (0)
 		//    to 0x39 (9), 0x41 (A) to 0x46 (F), and 0x61 (a) to 0x66 (f), all inclusive, append byte to output.
@@ -346,9 +333,28 @@ func percentDecodeString(input string) string {
 	return string(percentDecode([]byte(input)))
 }
 
+func utf8DecodeWithoutBOMString(input string) string {
+	if r, sz := utf8.DecodeRuneInString(input); r == '\uFEFF' {
+		input = input[sz:]
+	}
+
+	var i int
+	for i < len(input) {
+		r, sz := utf8.DecodeRuneInString(input[i:])
+		if r != utf8.RuneError {
+			i += sz
+			continue
+		}
+
+		input = input[:i] + string(utf8.RuneError) + input[i+sz:]
+		i += utf8.UTFMax
+	}
+
+	return input
+}
+
 // Equals returns true if urlA and urlB compare equal under u.
 func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
-	// TODO: Add to / support in [Client]
 	variationConfig := *u
 
 	// From https://httpwg.org/http-extensions/draft-ietf-httpbis-no-vary-search.html#name-comparing
@@ -358,24 +364,17 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	//
 	// 1. If the scheme, host, port, or path of urlA and urlB differ, then return false.
 	if urlA.Scheme != urlB.Scheme || urlA.Host != urlB.Host || urlA.EscapedPath() != urlB.EscapedPath() {
-		// TODO: Test scheme
-		// TODO: Test host
-		// TODO: Test port
-		// TODO: Test path
-		// TODO: Test escaped paths
 		return false
 	}
 
 	// 2. If variationConfig is equivalent to the default URL variation config, then:
 	if isDefaultURLVariationConfig(variationConfig) {
 		// 1. If urlA's query equals urlB's query, then return true.
-		if urlA.RawQuery == urlB.RawQuery || urlA.Query().Encode() == urlB.Query().Encode() {
-			// TODO: Test
+		if urlA.RawQuery == urlB.RawQuery || slices.Equal(parseURLEncoded(urlA.RawQuery), parseURLEncoded(urlB.RawQuery)) {
 			return true
 		}
 
 		// 2. Return false.
-		// TODO: Test
 		return false
 	}
 
@@ -386,7 +385,6 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	//    application/x-www-form-urlencoded parser [WHATWG-URL] given the isomorphic encoding [WHATWG-INFRA] of
 	//    urlA's query.
 	if urlA.RawQuery != "" {
-		// TODO: Test
 		searchParamsA = parseURLEncoded(urlA.RawQuery)
 	}
 
@@ -394,7 +392,6 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	//    application/x-www-form-urlencoded parser [WHATWG-URL] given the isomorphic encoding [WHATWG-INFRA] of
 	//    urlB's query.
 	if urlB.RawQuery != "" {
-		// TODO: Test
 		searchParamsB = parseURLEncoded(urlB.RawQuery)
 	}
 
@@ -403,28 +400,23 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	case !variationConfig.NoVaryParamsWildcard:
 		// 1. Set searchParamsA to a list containing those items pair in searchParamsA where variationConfig's
 		//    no-vary params does not contain pair[0].
-		// TODO: Test
 		searchParamsA = searchParamsA.except(variationConfig.NoVaryParams)
 
 		// 2. Set searchParamsB to a list containing those items pair in searchParamsB where variationConfig's
 		//    no-vary params does not contain pair[0].
-		// TODO: Test
 		searchParamsB = searchParamsB.except(variationConfig.NoVaryParams)
 	// 7. Otherwise, if variationConfig's vary params is a list, then:
 	case !variationConfig.VaryParamsWildcard:
 		// 1. Set searchParamsA to a list containing those items pair in searchParamsA where variationConfig's
 		//    vary params contains pair[0].
-		// TODO: Test
 		searchParamsA = searchParamsA.only(variationConfig.VaryParams)
 
 		// 2. Set searchParamsB to a list containing those items pair in searchParamsB where variationConfig's
 		//    vary params contains pair[0].
-		// TODO: Test
 		searchParamsB = searchParamsB.only(variationConfig.VaryParams)
 	}
 
 	// 8. If variationConfig's vary on key order is false, then:
-	// TODO: Test
 	if !variationConfig.VaryParamsWildcard {
 		// 1. Let keyLessThan be an algorithm taking as inputs two pairs (keyA, valueA) and (keyB, valueB), which
 		//    returns whether keyA is code unit less than [WHATWG-INFRA] keyB.
@@ -433,11 +425,9 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 		}
 
 		// 2. Set searchParamsA to the result of sorting [WHATWG-INFRA] searchParamsA in ascending order with keyLessThan.
-		// TODO: Test
 		slices.SortFunc(searchParamsA, keyLessThan)
 
 		// 3. Set searchParamsB to the result of sorting [WHATWG-INFRA] searchParamsB in ascending order with keyLessThan.
-		// TODO: Test
 		slices.SortFunc(searchParamsB, keyLessThan)
 	}
 
@@ -449,7 +439,5 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	// 11. 2. If searchParamsA[i][1] does not equal searchParamsB[i][1], then return false.
 	// 11. 3. Set i to i + 1.
 	// 12. Return true
-	// TODO: Test
-	// TODO: Test with examples https://httpwg.org/http-extensions/draft-ietf-httpbis-no-vary-search.html#name-examples-3
 	return slices.Equal(searchParamsA, searchParamsB)
 }
