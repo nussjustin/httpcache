@@ -663,6 +663,107 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 	}
 }
 
+func TestConfig_ParseResponseDirectives(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  httpcache.Config
+		headers http.Header
+		want    httpcache.ResponseDirectives
+	}{
+		{
+			name:   "no targeted, no header",
+			config: httpcache.Config{},
+		},
+		{
+			name:   "no targeted, cache-control header set",
+			config: httpcache.Config{},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+			},
+			want: httpcache.ResponseDirectives{NoCache: true},
+		},
+		{
+			name: "targeted, all targeted set, cache-control header set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+				"Target-1":      []string{"no-store"},
+				"Target-2":      []string{"no-transform"},
+			},
+			want: httpcache.ResponseDirectives{NoStore: true},
+		},
+		{
+			name: "targeted, one targeted set, cache-control header set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+				"Target-2":      []string{"no-transform"},
+			},
+			want: httpcache.ResponseDirectives{NoTransform: true},
+		},
+		{
+			name: "targeted, no targeted set, cache-control header set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+			},
+			want: httpcache.ResponseDirectives{NoCache: true},
+		},
+		{
+			name: "targeted, no targeted set, cache-control header not set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{},
+			want:    httpcache.ResponseDirectives{},
+		},
+		{
+			name: "targeted, first targeted invalid, cache-control header set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+				"Target-1":      []string{","},
+				"Target-2":      []string{"no-transform"},
+			},
+			want: httpcache.ResponseDirectives{NoTransform: true},
+		},
+		{
+			name: "targeted, all targeted invalid, cache-control header set",
+			config: httpcache.Config{
+				TargetList: []string{"Target-1", "Target-2"},
+			},
+			headers: http.Header{
+				"Cache-Control": []string{"no-cache"},
+				"Target-1":      []string{","},
+				"Target-2":      []string{"="},
+			},
+			want: httpcache.ResponseDirectives{NoCache: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.config.ParseResponseDirectives(tt.headers)
+
+			if err != nil {
+				t.Fatalf("Config.ParseResponseDirectives() error = %v, want nil", err)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Config.ParseResponseDirectives() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1996,11 +2097,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 				t.Errorf("ParseTargetedResponseDirectives() error = %v, want nil", err)
 			}
 			if len(tt.wantErr) > 0 {
-				var gotErrs []string
-
-				for _, gotErr := range err.(interface{ Unwrap() []error }).Unwrap() {
-					gotErrs = append(gotErrs, gotErr.Error())
-				}
+				gotErrs := errorStrings(err)
 
 				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
 					t.Errorf("ParseTargetedResponseDirectives() error mismatch (-want +got):\n%s", diff)

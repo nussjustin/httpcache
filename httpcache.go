@@ -67,6 +67,10 @@ type Config struct {
 	//
 	// Other responses are not required to be understood.
 	UnderstoodResponseCodes []int
+
+	// TargetList, if not empty, contains alternative headers that a [Client] will check in favor of Cache-Control, as
+	// specified in RFC 9213.
+	TargetList []string
 }
 
 // DefaultSupportedRequestMethods is the default list of request methods that allow caching.
@@ -129,10 +133,7 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 		return false
 	}
 
-	var respDirectives ResponseDirectives
-	if s := strings.Join(resp.Header["Cache-Control"], ","); s != "" {
-		respDirectives, _ = ParseResponseDirectives(s)
-	}
+	respDirectives, _ := c.ParseResponseDirectives(resp.Header)
 
 	// - the response status code is final (see Section 15 of [HTTP]);
 	if resp.StatusCode < 200 {
@@ -199,6 +200,25 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 	return true
 }
 
+// ParseResponseDirectives parses the Cache-Control directives for a response, respecting the targeted cache control
+// headers defined in [Config.TargetList], as specified in RFC 9213.
+func (c Config) ParseResponseDirectives(h http.Header) (ResponseDirectives, error) {
+	for _, name := range c.TargetList {
+		s := h[name]
+		if len(s) == 0 {
+			continue
+		}
+
+		d, err := ParseTargetedResponseDirectives(strings.Join(s, ","))
+		if err != nil {
+			continue
+		}
+		return d, nil
+	}
+
+	return ParseResponseDirectives(strings.Join(h["Cache-Control"], ","))
+}
+
 func hasValidExpires(h http.Header) bool {
 	ss := h["Expires"]
 
@@ -256,11 +276,11 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 		}
 	}
 
-	if c.RespectResponseDirectivePrivateValue && len(headers["Cache-Control"]) > 0 {
+	if c.RespectResponseDirectivePrivateValue {
 		// The no-cache (Section 5.2.2.4) and private (Section 5.2.2.7) cache directives can have arguments that prevent
 		// storage of header fields by all caches and shared caches, respectively.
 
-		directives, _ := ParseResponseDirectives(strings.Join(headers["Cache-Control"], ","))
+		directives, _ := c.ParseResponseDirectives(headers)
 
 		for _, header := range directives.PrivateHeaders {
 			delete(headers, http.CanonicalHeaderKey(header))
