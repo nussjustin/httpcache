@@ -110,10 +110,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		// should be considered stale.
 		expires, _ := ParseExpires(stored.Header.Get("Expires"))
 
-		var respDirectives ResponseDirectives
-		if s := strings.Join(stored.Header["Cache-Control"], ","); s != "" {
-			respDirectives, _ = ParseResponseDirectives(s)
-		}
+		respDirectives, _ := c.Config.ParseResponseDirectives(stored.Header)
 
 		freshnessLifetime, _ := CalculateFreshnessLifetime(
 			c.Config.Private,
