@@ -14,107 +14,6 @@ import (
 	"github.com/nussjustin/httpsfv"
 )
 
-func TestConfig_AllowsCachedResponseFor(t *testing.T) {
-	tests := []struct {
-		name   string
-		config httpcache.Config
-		req    http.Request
-		want   bool
-	}{
-		{
-			name:   `supported method, no no-cache directive`,
-			config: httpcache.Config{},
-			req:    http.Request{Method: "GET"},
-			want:   true,
-		},
-		{
-			name:   `supported method, no-cache directive`,
-			config: httpcache.Config{},
-			req: http.Request{
-				Method: "GET",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: true,
-		},
-		{
-			name:   `supported method, no-cache directive, RespectRequestDirectiveNoCache set`,
-			config: httpcache.Config{RespectRequestDirectiveNoCache: true},
-			req: http.Request{
-				Method: "GET",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: false,
-		},
-		{
-			name:   `unsupported method, no no-cache directive`,
-			config: httpcache.Config{},
-			req:    http.Request{Method: "POST"},
-			want:   false,
-		},
-		{
-			name:   `unsupported method, no-cache directive`,
-			config: httpcache.Config{},
-			req: http.Request{
-				Method: "POST",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: false,
-		},
-		{
-			name:   `unsupported method, no-cache directive, RespectRequestDirectiveNoCache set`,
-			config: httpcache.Config{RespectRequestDirectiveNoCache: true},
-			req: http.Request{
-				Method: "POST",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: false,
-		},
-		{
-			name:   `supported method by custom list, no no-cache directive`,
-			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}},
-			req:    http.Request{Method: "POST"},
-			want:   true,
-		},
-		{
-			name:   `supported method by custom list, no-cache directive`,
-			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}},
-			req: http.Request{
-				Method: "POST",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: true,
-		},
-		{
-			name:   `supported method by custom list, no-cache directive, RespectRequestDirectiveNoCache set`,
-			config: httpcache.Config{SupportedRequestMethods: []string{"POST"}, RespectRequestDirectiveNoCache: true},
-			req: http.Request{
-				Method: "POST",
-				Header: http.Header{
-					"Cache-Control": []string{"no-cache"},
-				},
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.config.AllowsCachedResponseFor(&tt.req); got != tt.want {
-				t.Errorf("Config.AllowsCachedResponseFor() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestConfig_AllowsStoringResponse(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2454,6 +2353,307 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 			}
 			if gotOk != tt.wantOk {
 				t.Errorf("FreshnessLifetime() gotOk = %v, want %v", gotOk, tt.wantOk)
+			}
+		})
+	}
+}
+
+func TestParseStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    httpcache.Status
+		wantErr bool
+	}{
+		{
+			name: "minimal",
+			in:   `test`,
+			want: httpcache.Status{
+				Cache: "test",
+			},
+		},
+		{
+			name: "minimal hit with string cache",
+			in:   `"test"`,
+			want: httpcache.Status{
+				Cache: "test",
+			},
+		},
+		{
+			name: "minimal hit",
+			in:   `test;hit`,
+			want: httpcache.Status{
+				Cache: "test",
+				Hit:   true,
+			},
+		},
+		{
+			name: "full hit",
+			in:   `test;hit;ttl=2;key="cache key";detail=detail`,
+			want: httpcache.Status{
+				Cache:  "test",
+				Hit:    true,
+				TTL:    2 * time.Second,
+				Key:    "cache key",
+				Detail: "detail",
+			},
+		},
+		{
+			name: "full hit with string detail",
+			in:   `test;hit;ttl=2;key="cache key";detail="some detail"`,
+			want: httpcache.Status{
+				Cache:  "test",
+				Hit:    true,
+				TTL:    2 * time.Second,
+				Key:    "cache key",
+				Detail: "some detail",
+			},
+		},
+		{
+			name: "minimal forwarded",
+			in:   `test;fwd=uri-miss`,
+			want: httpcache.Status{
+				Cache:     "test",
+				Forwarded: httpcache.ForwardedReasonURIMiss,
+			},
+		},
+		{
+			name: "full forwarded",
+			in:   `test;fwd=vary-miss;fwd-status=418;ttl=2;key="cache key";detail=detail`,
+			want: httpcache.Status{
+				Cache:           "test",
+				Forwarded:       httpcache.ForwardedReasonVaryMiss,
+				ForwardedStatus: http.StatusTeapot,
+				TTL:             2 * time.Second,
+				Key:             "cache key",
+				Detail:          "detail",
+			},
+		},
+		{
+			name: "full forwarded with string detail",
+			in:   `test;fwd=vary-miss;fwd-status=418;ttl=2;key="cache key";detail="some detail"`,
+			want: httpcache.Status{
+				Cache:           "test",
+				Forwarded:       httpcache.ForwardedReasonVaryMiss,
+				ForwardedStatus: http.StatusTeapot,
+				TTL:             2 * time.Second,
+				Key:             "cache key",
+				Detail:          "some detail",
+			},
+		},
+
+		{
+			name: "hit set to false",
+			in:   `test;hit=?0`,
+			want: httpcache.Status{
+				Cache: "test",
+			},
+		},
+		{
+			name: "explicit true hit",
+			in:   `test;hit=?1`,
+			want: httpcache.Status{
+				Cache: "test",
+				Hit:   true,
+			},
+		},
+		{
+			name: "negative ttl",
+			in:   `test;hit;ttl=-1`,
+			want: httpcache.Status{
+				Cache: "test",
+				Hit:   true,
+				TTL:   -time.Second,
+			},
+		},
+
+		{
+			name:    "empty",
+			wantErr: true,
+		},
+		{
+			name:    "empty cache",
+			in:      `""`,
+			wantErr: true,
+		},
+		{
+			name:    "hit and forwarded",
+			in:      `test;hit;fwd=miss`,
+			wantErr: true,
+		},
+
+		{
+			name: "invalid",
+			// space after parameter key
+			in:      `test;fwd =bypass`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid cache",
+			in:      `%"display string"`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid hit",
+			in:      `test;hit=token`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid fwd",
+			in:      `test;fwd="bypass"`,
+			wantErr: true,
+		},
+		{
+			name:    "unknown fwd",
+			in:      `test;fwd=unknown`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid fwd-status",
+			in:      `test;fwd=bypass;fwd-status=100.0`,
+			wantErr: true,
+		},
+		{
+			name: "unknown fwd-status",
+			in:   `test;fwd=bypass;fwd-status=9999`,
+			want: httpcache.Status{
+				Cache:           "test",
+				Forwarded:       httpcache.ForwardedReasonBypass,
+				ForwardedStatus: 9999,
+			},
+		},
+		{
+			name:    "invalid ttl",
+			in:      `test;hit;ttl=2.5`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid stored",
+			in:      `test;fwd=miss;stored=test`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid collapsed",
+			in:      `test;fwd=miss;stored=test`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid key",
+			in:      `test;hit;key=token"`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid detail",
+			in:      `test;hit;key=%"display string"`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpcache.ParseStatus(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseStatus() error = %v, want %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseStatus() got = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStatus_AppendText(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  httpcache.Status
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "minimal",
+			status: httpcache.Status{
+				Cache: "test",
+			},
+			want: `"test"`,
+		},
+		{
+			name: "minimal hit",
+			status: httpcache.Status{
+				Cache: "test",
+				Hit:   true,
+			},
+			want: `"test";hit`,
+		},
+		{
+			name: "full hit",
+			status: httpcache.Status{
+				Cache:  "test",
+				Hit:    true,
+				TTL:    2*time.Second + 500*time.Millisecond,
+				Key:    "cache key",
+				Detail: "some detail",
+			},
+			want: `"test";hit;ttl=2;key="cache key";detail="some detail"`,
+		},
+		{
+			name: "minimal forwarded",
+			status: httpcache.Status{
+				Cache:     "test",
+				Forwarded: httpcache.ForwardedReasonURIMiss,
+			},
+			want: `"test";fwd=uri-miss`,
+		},
+		{
+			name: "full forwarded",
+			status: httpcache.Status{
+				Cache:           "test",
+				Forwarded:       httpcache.ForwardedReasonVaryMiss,
+				ForwardedStatus: http.StatusTeapot,
+				TTL:             2*time.Second + 500*time.Millisecond,
+				Key:             "cache key",
+				Detail:          "some detail",
+			},
+			want: `"test";fwd=vary-miss;fwd-status=418;ttl=2;key="cache key";detail="some detail"`,
+		},
+
+		{
+			name: "negative ttl",
+			status: httpcache.Status{
+				Cache: "test",
+				Hit:   true,
+				TTL:   -time.Second,
+			},
+			want: `"test";hit;ttl=-1`,
+		},
+
+		{
+			name:    "empty",
+			wantErr: true,
+		},
+		{
+			name: "hit and forwarded",
+			status: httpcache.Status{
+				Cache:     "test",
+				Hit:       true,
+				Forwarded: httpcache.ForwardedReasonBypass,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.status.AppendText([]byte("prefix:"))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Status.AppendText() error = %v, want %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if want := "prefix:" + tt.want; string(got) != want {
+				t.Errorf("AppendText() got = %q, want %q", got, want)
 			}
 		})
 	}

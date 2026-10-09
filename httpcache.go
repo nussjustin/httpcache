@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"iter"
 	"math"
 	"net/http"
@@ -14,10 +15,21 @@ import (
 	"time"
 
 	"github.com/nussjustin/httpcache/internal/cachecontrol"
+	"github.com/nussjustin/httpsfv"
 )
 
 // Config defines characteristics of the cache based on which cacheability can be calculated.
 type Config struct {
+	// TODO: Implement
+	// Name is the name of the cache for use in the Cache-Status header.
+	//
+	// If empty, defaults to "cache".
+	Name string
+
+	// TODO: Implement
+	// AddCacheStatus can be set to true to set the Cache-Status header as specified in RFC 9211.
+	AddCacheStatus bool
+
 	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
 	//
 	// If nil, defaults to DefaultHeuristicallyCacheableStatusCodes.
@@ -95,29 +107,6 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusGone,
 	http.StatusRequestURITooLong,
 	http.StatusNotImplemented,
-}
-
-// AllowsCachedResponseFor returns true if the config allows returning a cached response for the given request.
-//
-// By default, this only checks if the request method is supported, but if [Config.RespectRequestDirectiveNoCache] is
-// true, it also checks if the request has no no-cache Cache-Control directive.
-func (c Config) AllowsCachedResponseFor(req *http.Request) bool {
-	if !c.isSupportedRequestMethod(req.Method) {
-		return false
-	}
-
-	if c.RespectRequestDirectiveNoCache {
-		var reqDirectives RequestDirectives
-		if s := strings.Join(req.Header["Cache-Control"], ","); s != "" {
-			reqDirectives, _ = ParseRequestDirectives(s)
-		}
-
-		if reqDirectives.NoCache {
-			return false
-		}
-	}
-
-	return true
 }
 
 // AllowsStoringResponse checks if the given response can be cached.
@@ -1048,4 +1037,252 @@ func (d ResponseDirectives) String() string {
 		ss = append(ss, ext.String())
 	}
 	return strings.Join(ss, ", ")
+}
+
+// Status represents a Cache-Status response header as specified in RFC 9211.
+type Status struct {
+	// Cache contains the name of the cache that generated the status.
+	Cache string
+
+	// Hit is true if the cache satisfied the request. Only one of Hit or Forwarded can be set.
+	Hit bool
+
+	// Forwarded contains the reason the cache forwarded the request.
+	Forwarded ForwardedReason
+
+	// ForwardedStatus, if set, contains the status code returned by the origin.
+	ForwardedStatus int
+
+	// TTL optionally contains the remaining time to live for the cached response, in seconds.
+	TTL time.Duration
+
+	// Stored is true if the response was stored in the cache.
+	Stored bool
+
+	// Collapsed indicates that the request was collapsed with other, meaning that multiple requests were combined into
+	// one.
+	Collapsed bool
+
+	// Key optionally contains the cache key used for retrieving or storing the response.
+	Key string
+
+	// Detail optionally contains additional details given by the cache.
+	Detail string
+}
+
+var (
+	errStatusHitAndForwardedSet = errors.New("both Hit and Forwarded fields set at the same time")
+
+	errStatusMissingCache = errors.New("missing Cache field in Status")
+)
+
+// ParseStatus parses a Cache-Status header as specified in RFC 9211.
+func ParseStatus(header string) (Status, error) {
+	item, err := httpsfv.Parse[httpsfv.Item](header)
+	if err != nil {
+		// TODO: Test
+		return Status{}, err
+	}
+
+	var s Status
+
+	switch t := item.Type(); t {
+	case httpsfv.BareItemTypeString:
+		s.Cache = item.String()
+	case httpsfv.BareItemTypeToken:
+		s.Cache = item.Token()
+	default:
+		return Status{}, fmt.Errorf("invalid structured header item type %s", t)
+	}
+
+	if s.Cache == "" {
+		return Status{}, errStatusMissingCache
+	}
+
+	if hit, ok := item.Parameters.Get("hit"); ok {
+		if t := hit.Type(); t != httpsfv.BareItemTypeBoolean {
+			return Status{}, fmt.Errorf("invalid hit parameter of type %s", t)
+		}
+
+		s.Hit = hit.Boolean()
+	}
+
+	if fwd, ok := item.Parameters.Get("fwd"); ok {
+		if t := fwd.Type(); t != httpsfv.BareItemTypeToken {
+			return Status{}, fmt.Errorf("invalid fwd parameter of type %s", t)
+		}
+
+		reason, ok := forwardedReasons[fwd.Token()]
+		if !ok {
+			return Status{}, fmt.Errorf("unknown fwd value %q", fwd.Token())
+		}
+
+		s.Forwarded = reason
+
+		if s.Hit {
+			return Status{}, errStatusHitAndForwardedSet
+		}
+	}
+
+	if fwdStatus, ok := item.Parameters.Get("fwd-status"); ok {
+		if t := fwdStatus.Type(); t != httpsfv.BareItemTypeInteger {
+			return Status{}, fmt.Errorf("invalid fwd-status parameter of type %s", t)
+		}
+
+		s.ForwardedStatus = int(fwdStatus.Integer())
+	}
+
+	if ttl, ok := item.Parameters.Get("ttl"); ok {
+		if t := ttl.Type(); t != httpsfv.BareItemTypeInteger {
+			return Status{}, fmt.Errorf("invalid ttl parameter of type %s", t)
+		}
+
+		s.TTL = time.Duration(ttl.Integer()) * time.Second
+	}
+
+	if stored, ok := item.Parameters.Get("stored"); ok {
+		if t := stored.Type(); t != httpsfv.BareItemTypeBoolean {
+			return Status{}, fmt.Errorf("invalid stored parameter of type %s", t)
+		}
+
+		s.Stored = stored.Boolean()
+	}
+
+	if collapsed, ok := item.Parameters.Get("collapsed"); ok {
+		if t := collapsed.Type(); t != httpsfv.BareItemTypeBoolean {
+			return Status{}, fmt.Errorf("invalid collapsed parameter of type %s", t)
+		}
+
+		s.Collapsed = collapsed.Boolean()
+	}
+
+	if key, ok := item.Parameters.Get("key"); ok {
+		if t := key.Type(); t != httpsfv.BareItemTypeString {
+			return Status{}, fmt.Errorf("invalid key parameter of type %s", t)
+		}
+
+		s.Key = key.String()
+	}
+
+	if detail, ok := item.Parameters.Get("detail"); ok {
+		t := detail.Type()
+
+		if t != httpsfv.BareItemTypeString && t != httpsfv.BareItemTypeToken {
+			return Status{}, fmt.Errorf("invalid detail parameter of type %s", t)
+		}
+
+		if t == httpsfv.BareItemTypeString {
+			s.Detail = detail.String()
+		} else {
+			s.Detail = detail.Token()
+		}
+	}
+
+	return s, nil
+}
+
+// AppendText appends the formatted status to the given slice.
+//
+// If [Status.Cache] is empty or both Hit and Forwarded are set, an error is returned.
+//
+// It implements the [encoding.TextAppender] interface.
+func (s Status) AppendText(text []byte) ([]byte, error) {
+	if s.Cache == "" {
+		return nil, errStatusMissingCache
+	}
+
+	if s.Hit && s.Forwarded != "" {
+		return nil, errStatusHitAndForwardedSet
+	}
+
+	item := s.asItem()
+
+	return item.AppendText(text)
+}
+
+func (s Status) asItem() httpsfv.Item {
+	var p httpsfv.Parameters
+
+	if s.Hit {
+		p.Set("hit", httpsfv.BareItemBoolean(true))
+	}
+
+	if s.Forwarded != "" {
+		p.Set("fwd", httpsfv.BareItemToken(s.Forwarded.String()))
+	}
+
+	if s.ForwardedStatus != 0 {
+		p.Set("fwd-status", httpsfv.BareItemInteger(int64(s.ForwardedStatus)))
+	}
+
+	if s.TTL != 0 {
+		p.Set("ttl", httpsfv.BareItemInteger(int64(s.TTL.Seconds())))
+	}
+
+	if s.Stored {
+		p.Set("stored", httpsfv.BareItemBoolean(true))
+	}
+
+	if s.Collapsed {
+		p.Set("collapsed", httpsfv.BareItemBoolean(true))
+	}
+
+	if s.Key != "" {
+		p.Set("key", httpsfv.BareItemString(s.Key))
+	}
+
+	if s.Detail != "" {
+		p.Set("detail", httpsfv.BareItemString(s.Detail))
+	}
+
+	return httpsfv.Item{BareItem: httpsfv.BareItemString(s.Cache), Parameters: p}
+}
+
+// ForwardedReason is an enum of the possible reasons a request was forwarded by a cache.
+type ForwardedReason string
+
+const (
+	// ForwardedReasonBypass is set when the cache was configured to not handle this request.
+	ForwardedReasonBypass ForwardedReason = "bypass"
+
+	// ForwardedReasonMethod is set when the request method's semantics require the request to be forwarded.
+	ForwardedReasonMethod ForwardedReason = "method"
+
+	// ForwardedReasonURIMiss is set when the cache did not contain any responses that matched the request URI.
+	ForwardedReasonURIMiss ForwardedReason = "uri-miss"
+
+	// ForwardedReasonVaryMiss is set when The cache contained a response that matched the request URI, but it could
+	// not select a response based upon this request's header fields and stored Vary header fields.
+	ForwardedReasonVaryMiss ForwardedReason = "vary-miss"
+
+	// ForwardedReasonMiss is set when the cache did not contain any responses that could be used to satisfy this
+	// request (to be used when an implementation cannot distinguish between uri-miss and vary-miss).;
+	ForwardedReasonMiss ForwardedReason = "miss"
+
+	// ForwardedReasonRequest is set when the cache was able to select a fresh response for the request, but the
+	// request's semantics (e.g., Cache-Control request directives) did not allow its use.
+	ForwardedReasonRequest ForwardedReason = "request"
+
+	// ForwardedReasonStale is set when the cache was able to select a response for the request, but it was stale.
+	ForwardedReasonStale ForwardedReason = "stale"
+
+	// ForwardedReasonPartial is set when the cache was able to select a partial response for the request, but it did
+	// not contain all the requested ranges (or the request was for the complete response).
+	ForwardedReasonPartial ForwardedReason = "partial"
+)
+
+var forwardedReasons = map[string]ForwardedReason{
+	string(ForwardedReasonBypass):   ForwardedReasonBypass,
+	string(ForwardedReasonMethod):   ForwardedReasonMethod,
+	string(ForwardedReasonURIMiss):  ForwardedReasonURIMiss,
+	string(ForwardedReasonVaryMiss): ForwardedReasonVaryMiss,
+	string(ForwardedReasonMiss):     ForwardedReasonMiss,
+	string(ForwardedReasonRequest):  ForwardedReasonRequest,
+	string(ForwardedReasonStale):    ForwardedReasonStale,
+	string(ForwardedReasonPartial):  ForwardedReasonPartial,
+}
+
+// String returns the underlying value of f.
+func (f ForwardedReason) String() string {
+	return string(f)
 }

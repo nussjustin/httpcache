@@ -16,7 +16,7 @@ import (
 // Client wraps an existing [*net/http.Client] (or [http.DefaultClient]) adding caching of responses using a
 // configurable [Store].
 type Client struct {
-	// Config is used to validate whether responses can be cached and to normalize them before storing.
+	// Config can be used to configure the behavior of the Client.
 	Config Config
 
 	// HTTPClient is used for sending requests that cannot be served from the cache.
@@ -72,23 +72,47 @@ func cloneResponse(resp *http.Response) (*http.Response, error) {
 //
 // The same applies to requests that include the Expect header.
 //
-// Errors during the parsing of request or response headers (e.g. Cache-Control) are ignored.
+// Errors during the parsing of request or response headers (like Cache-Control) are ignored.
 //
 // Stale responses will result in a conditional request with If-Modified-Since and/or If-None-Match iff the cached
 // response has the Last-Modified and/or ETag header set. Otherwise, the response will be sent as if no cached response
 // was found.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	resp, status, err := c.do(req)
+	if !c.Config.AddCacheStatus || err != nil {
+		return resp, err
+	}
+
+	if text, err := status.AppendText(make([]byte, 0, 64)); err == nil {
+		resp.Header.Add("Cache-Status", string(text))
+	}
+
+	return resp, nil
+}
+
+func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	client := c.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	if !c.Config.AllowsCachedResponseFor(req) {
-		return client.Do(req)
+	var status Status
+	if c.Config.Name != "" {
+		status.Cache = c.Config.Name
+	} else {
+		status.Cache = "cache"
+	}
+
+	if !c.Config.isSupportedRequestMethod(req.Method) {
+		resp, err := client.Do(req)
+		status.Forwarded = ForwardedReasonMethod
+		return resp, status, err
 	}
 
 	if len(req.Header["Expect"]) != 0 {
-		return client.Do(req)
+		resp, err := client.Do(req)
+		status.Forwarded = ForwardedReasonRequest
+		return resp, status, err
 	}
 
 	var reqDirectives RequestDirectives
@@ -96,9 +120,15 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		reqDirectives, _ = ParseRequestDirectives(s)
 	}
 
-	stored, _ := c.Store.Get(req.Context(), req)
+	if c.Config.RespectRequestDirectiveNoCache && reqDirectives.NoCache {
+		resp, err := client.Do(req)
+		status.Forwarded = ForwardedReasonRequest
+		return resp, status, err
+	}
 
-	if stored != nil {
+	stored, err := c.Store.Get(req.Context(), req)
+
+	if stored != nil && err == nil {
 		age, _ := ParseAge(stored.Header.Get("Age"))
 
 		date, _ := http.ParseTime(stored.Header.Get("Date"))
@@ -126,12 +156,18 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			reqDirectives.MaxAge,
 			reqDirectives.MaxStale)
 
+		status.TTL = freshnessLifetime - age
+
 		switch freshness {
 		case FreshnessExpired:
+			status.Forwarded = ForwardedReasonMiss
 			stored = nil
 		case FreshnessFresh:
-			return stored, nil
+			status.Hit = true
+			return stored, status, nil
 		case FreshnessStale:
+			status.Forwarded = ForwardedReasonStale
+
 			etag := stored.Header.Get("Etag")
 			lastModified := stored.Header.Get("Last-Modified")
 
@@ -150,10 +186,12 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 				stored = nil
 			}
 		}
+	} else {
+		status.Forwarded = ForwardedReasonMiss
 	}
 
 	if reqDirectives.OnlyIfCached {
-		return &http.Response{
+		resp := &http.Response{
 			Status:        http.StatusText(http.StatusGatewayTimeout),
 			StatusCode:    http.StatusGatewayTimeout,
 			Proto:         req.Proto,
@@ -165,7 +203,9 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			Trailer:       http.Header{},
 			Request:       req,
 			TLS:           req.TLS,
-		}, nil
+		}
+
+		return resp, status, nil
 	}
 
 	reqTime := time.Now()
@@ -173,32 +213,34 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	//goland:noinspection GoResourceLeak
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, Status{}, err
 	}
 
 	respTime := time.Now()
 
 	if stored != nil && resp.StatusCode == http.StatusNotModified {
-		return stored, nil
+		return stored, status, nil
 	}
 
 	if c.Config.AllowsStoringResponse(resp) {
 		respCopy, err := cloneResponse(resp)
 		if err != nil {
-			return nil, err
+			return nil, Status{}, err
 		}
 
 		c.Config.RemoveUnstorableHeaders(respCopy.Header)
 
-		_ = c.Store.Set(req.Context(), req, reqTime, respCopy, respTime)
+		if err := c.Store.Set(req.Context(), req, reqTime, respCopy, respTime); err == nil {
+			status.Stored = true
+		}
 	}
 
-	return resp, nil
+	return resp, status, nil
 }
 
 // Store defines the interface used by [Client] for storing and retrieving responses.
 //
-// A store must handle storing and retrieving requests based on their method, URL and headers specified in the Vary
+// A store must handle storing and retrieving requests based on their method, URL, and headers specified in the Vary
 // response header.
 //
 // A store must be safe for concurrent use by multiple goroutines.
