@@ -11,7 +11,8 @@ import (
 	"github.com/nussjustin/httpsfv"
 )
 
-// URLVariationConfig is the parsed representation of the No-Vary-Search header.
+// URLVariationConfig is the parsed representation of the No-Vary-Search header as specified in
+// draft-ietf-httpbis-no-vary-search-10.
 type URLVariationConfig struct {
 	// VaryOnKeyOrder, if true, means that a different order of keys in a query string should result in separate cache
 	// entries, even if the keys and their values are otherwise equals.

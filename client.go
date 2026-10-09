@@ -283,7 +283,7 @@ type memoryStoreEntry struct {
 //
 // This is only meant for testing.
 //
-// There is no limit to the number of stored responses and expired responses are never removed.
+// There is no limit to the number of stored responses, and expired responses are never removed.
 func NewMemoryStore() Store {
 	return &memoryStore{}
 }
