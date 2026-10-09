@@ -237,6 +237,14 @@ func TestURLVariationConfig_Equals(t *testing.T) {
 		},
 
 		{
+			name:   "vary on key order with non-default-config",
+			config: httpcache.URLVariationConfig{VaryOnKeyOrder: true},
+			urlA:   url.URL{Scheme: "https", Host: "example.com", Path: "/path", RawQuery: "key1=value1&key2=value2"},
+			urlB:   url.URL{Scheme: "https", Host: "example.com", Path: "/path", RawQuery: "key2=value2&key1=value1"},
+			want:   false,
+		},
+
+		{
 			name:   "no vary on key order",
 			config: httpcache.URLVariationConfig{VaryOnKeyOrder: false},
 			urlA:   url.URL{Scheme: "https", Host: "example.com", Path: "/path", RawQuery: "key2=value2&key1=value1"},

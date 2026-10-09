@@ -50,7 +50,7 @@ func ParseNoVarySearch(lines []string) (URLVariationConfig, error) {
 	// From https://httpwg.org/http-extensions/draft-ietf-httpbis-no-vary-search.html#name-parse-a-url-variation-confi
 	//
 	// 1. If value is null, then return the default URL variation config.
-	if err != nil {
+	if err != nil || value.Len() == 0 {
 		return DefaultURLVariationConfig, err
 	}
 
@@ -418,7 +418,7 @@ func (u *URLVariationConfig) Equals(urlA, urlB *url.URL) bool {
 	}
 
 	// 8. If variationConfig's vary on key order is false, then:
-	if !variationConfig.VaryParamsWildcard {
+	if !variationConfig.VaryOnKeyOrder {
 		// 1. Let keyLessThan be an algorithm taking as inputs two pairs (keyA, valueA) and (keyB, valueB), which
 		//    returns whether keyA is code unit less than [WHATWG-INFRA] keyB.
 		keyLessThan := func(a, b urlDecodedPair) int {
