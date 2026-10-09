@@ -874,11 +874,12 @@ func TestClient_Do(t *testing.T) {
 
 func TestMemoryStore(t *testing.T) {
 	tests := []struct {
-		name       string
-		storedReq  *http.Request
-		storedResp *http.Response
-		fetchedReq *http.Request
-		wantResp   *http.Response
+		name         string
+		storedReq    *http.Request
+		storedResp   *http.Response
+		fetchedReq   *http.Request
+		wantResp     *http.Response
+		wantStoreErr bool
 	}{
 		{
 			name:      "match",
@@ -951,6 +952,38 @@ func TestMemoryStore(t *testing.T) {
 				withReqHeader("Header-3", "Value-3")),
 		},
 		{
+			name:      "no-vary-search",
+			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=30"),
+				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
+				withRespHeader("Transaction-Id", "0")),
+			fetchedReq: newReq(withReqUrl("https://example.com/?c=3&a=1")),
+			wantResp: newResp(
+				withRespHeader("Age", "60"),
+				withRespHeader("Cache-Control", "public, max-age=30"),
+				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
+				withRespHeader("Transaction-Id", "0")),
+		},
+		{
+			name:      "no-vary-search miss",
+			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=30"),
+				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
+				withRespHeader("Transaction-Id", "0")),
+			fetchedReq: newReq(withReqUrl("https://example.com/?c=3&a=2")),
+		},
+		{
+			name:      "invalid no-vary-search",
+			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=30"),
+				withRespHeader("No-Vary-Search", "key-order=invalid"),
+				withRespHeader("Transaction-Id", "0")),
+			wantStoreErr: true,
+		},
+		{
 			name:      "expired",
 			storedReq: newReq(),
 			storedResp: newResp(
@@ -962,6 +995,15 @@ func TestMemoryStore(t *testing.T) {
 				withRespHeader("Cache-Control", "public, max-age=30"),
 				withRespHeader("Transaction-Id", "0")),
 		},
+		{
+			name:      "body read error",
+			storedReq: newReq(),
+			storedResp: newResp(
+				withRespBody(errReader{}),
+				withRespHeader("Cache-Control", "public, max-age=30"),
+				withRespHeader("Transaction-Id", "0")),
+			wantStoreErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -969,7 +1011,14 @@ func TestMemoryStore(t *testing.T) {
 				s := httpcache.NewMemoryStore()
 
 				if err := s.Set(t.Context(), tt.storedReq, time.Now(), tt.storedResp, time.Now()); err != nil {
+					if tt.wantStoreErr {
+						return
+					}
 					t.Fatalf("Set() error = %v, want nil", err)
+				}
+
+				if tt.wantStoreErr {
+					t.Fatal("Set() error = nil, want non-nil")
 				}
 
 				time.Sleep(time.Minute)

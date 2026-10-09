@@ -3,7 +3,6 @@ package httpcache
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -240,8 +239,12 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 // Store defines the interface used by [Client] for storing and retrieving responses.
 //
-// A store must handle storing and retrieving requests based on their method, URL, and headers specified in the Vary
-// response header.
+// A store must handle storing and retrieving requests based on their method and URL, while also respecting the
+// No-Vary-Search header, as well as the Vary header.
+//
+// No-Vary-Search handling can be implemented via [ParseNoVarySearch] and [URLVariationConfig.Equals].
+//
+// Support for the Vary header can be implemented via [ParseVary], [Vary.Take] and [Vary.Equals].
 //
 // A store must be safe for concurrent use by multiple goroutines.
 type Store interface {
@@ -254,9 +257,10 @@ type Store interface {
 
 	// Set stores the given response in the cache.
 	//
-	// The given request must not be modified.
+	// The given request must not be modified or retained.
 	//
-	// The response body is guaranteed to be readable without errors.
+	// The response is a copy of the original, without the Request field set, and the body is guaranteed to be
+	// readable without errors.
 	Set(
 		ctx context.Context,
 		req *http.Request, reqTime time.Time,
@@ -270,13 +274,14 @@ type memoryStore struct {
 }
 
 type memoryStoreEntry struct {
-	req         http.Request
-	reqTime     time.Time
-	resp        http.Response
-	respBody    []byte
-	respTime    time.Time
-	vary        Vary
-	varyHeaders http.Header
+	req                http.Request
+	reqTime            time.Time
+	resp               http.Response
+	respBody           []byte
+	respTime           time.Time
+	urlVariationConfig URLVariationConfig
+	vary               Vary
+	varyHeaders        http.Header
 }
 
 // NewMemoryStore returns a Store that stores responses in memory.
@@ -289,7 +294,10 @@ func NewMemoryStore() Store {
 }
 
 func (m *memoryStore) key(req *http.Request) string {
-	return fmt.Sprintf("%q %q", req.Method, req.URL.String())
+	// The query is handled by the URLVariationCOnfig
+	urlWithoutQuery := *req.URL
+	urlWithoutQuery.RawQuery = ""
+	return req.Method + " " + urlWithoutQuery.String()
 }
 
 func (m *memoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
@@ -301,6 +309,10 @@ func (m *memoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 	entries := m.entries[key]
 
 	for _, entry := range entries {
+		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
+			continue
+		}
+
 		if !entry.vary.Equals(entry.varyHeaders, req.Header) {
 			continue
 		}
@@ -339,6 +351,11 @@ func (m *memoryStore) Set(
 		return nil
 	}
 
+	urlVariationConfig, err := ParseNoVarySearch(resp.Header.Values("No-Vary-Search"))
+	if err != nil {
+		return err
+	}
+
 	key := m.key(req)
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -348,13 +365,20 @@ func (m *memoryStore) Set(
 	}
 
 	entry := &memoryStoreEntry{
-		req:         *req,
-		reqTime:     reqTime,
-		resp:        *resp,
-		respBody:    respBody,
-		respTime:    respTime,
-		vary:        vary,
-		varyHeaders: vary.Take(req.Header),
+		req:                *req,
+		reqTime:            reqTime,
+		resp:               *resp,
+		respBody:           respBody,
+		respTime:           respTime,
+		urlVariationConfig: urlVariationConfig,
+		vary:               vary,
+		varyHeaders:        vary.Take(req.Header),
+	}
+
+	// Note: Use URL.Clone once Go 1.27 is required.
+	entry.req.URL = new(*req.URL)
+	if entry.req.URL.User != nil {
+		entry.req.URL.User = new(*entry.req.URL.User)
 	}
 
 	m.entriesMu.Lock()
