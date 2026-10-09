@@ -270,13 +270,13 @@ type memoryStore struct {
 }
 
 type memoryStoreEntry struct {
-	req      http.Request
-	reqTime  time.Time
-	resp     http.Response
-	respBody []byte
-	respTime time.Time
-	vary     Vary
-	varyKey  string
+	req         http.Request
+	reqTime     time.Time
+	resp        http.Response
+	respBody    []byte
+	respTime    time.Time
+	vary        Vary
+	varyHeaders http.Header
 }
 
 // NewMemoryStore returns a Store that stores responses in memory.
@@ -301,9 +301,7 @@ func (m *memoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 	entries := m.entries[key]
 
 	for _, entry := range entries {
-		varyKey := entry.vary.Key(nil, req.Header)
-
-		if entry.varyKey != string(varyKey) {
+		if !entry.vary.Equals(entry.varyHeaders, req.Header) {
 			continue
 		}
 
@@ -341,8 +339,6 @@ func (m *memoryStore) Set(
 		return nil
 	}
 
-	varyKey := string(vary.Key(nil, req.Header))
-
 	key := m.key(req)
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -352,13 +348,13 @@ func (m *memoryStore) Set(
 	}
 
 	entry := &memoryStoreEntry{
-		req:      *req,
-		reqTime:  reqTime,
-		resp:     *resp,
-		respBody: respBody,
-		respTime: respTime,
-		vary:     vary,
-		varyKey:  varyKey,
+		req:         *req,
+		reqTime:     reqTime,
+		resp:        *resp,
+		respBody:    respBody,
+		respTime:    respTime,
+		vary:        vary,
+		varyHeaders: vary.Take(req.Header),
 	}
 
 	m.entriesMu.Lock()
@@ -367,7 +363,7 @@ func (m *memoryStore) Set(
 	entries := m.entries[key]
 
 	for i := range entries {
-		if entries[i].varyKey == varyKey {
+		if vary.Equals(entries[i].varyHeaders, entry.varyHeaders) {
 			entries[i] = entry
 			return nil
 		}

@@ -2,8 +2,6 @@
 package httpcache
 
 import (
-	"crypto/sha1"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
@@ -545,35 +543,54 @@ func ParseVary(lines []string) Vary {
 	return sorted
 }
 
-// Key calculates a unique key for the headers from v using the given header map and appends it to dst.
+// Equals returns true if the given header maps can be considered equal based on the headers in v.
 //
-// If v is empty or contains a wildcard, nil is returned and dst is not changed.
+// This does not perform any normalization on headers, like removing spaces or joining multi-line headers.
 //
-// The header values are not normalized in any way (e.g. stripping spaces or merging header lines).
-func (v Vary) Key(dst []byte, header http.Header) []byte {
+// If [Vary.Wildcard] returns true, this will always return false.
+func (v Vary) Equals(h1, h2 http.Header) bool {
+	if v.Wildcard() {
+		return false
+	}
+
+	for _, k := range v {
+		k = http.CanonicalHeaderKey(k)
+
+		v1, ok1 := h1[k]
+		v2, ok2 := h2[k]
+
+		if ok1 != ok2 || !slices.Equal(v1, v2) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// Take returns a new header map containing only the headers from the given map that are also included in v.
+//
+// The slices in the returned map are copies of the originals.
+//
+// If v is empty or if [Vary.Wildcard] returns true, nil is returned.
+func (v Vary) Take(header http.Header) http.Header {
 	if len(v) == 0 || v.Wildcard() {
 		return nil
 	}
 
-	h := sha1.New()
+	m := make(http.Header, len(v))
 
-	dst = slices.Grow(dst, h.Size())
+	for _, k := range v {
+		k = http.CanonicalHeaderKey(k)
 
-	for _, name := range v {
-		h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(name))))
-		h.Write([]byte(name))
-
-		values := header[name]
-
-		h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(values))))
-
-		for _, value := range header[name] {
-			h.Write(binary.BigEndian.AppendUint64(dst, uint64(len(value))))
-			h.Write([]byte(value))
+		v, ok := header[k]
+		if !ok {
+			continue
 		}
+
+		m[k] = slices.Clone(v)
 	}
 
-	return h.Sum(dst)
+	return m
 }
 
 // Wildcard returns true if v contains the wildcard value "*".

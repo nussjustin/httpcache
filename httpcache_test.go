@@ -1,7 +1,6 @@
 package httpcache_test
 
 import (
-	"encoding/hex"
 	"maps"
 	"math"
 	"net/http"
@@ -925,7 +924,142 @@ func TestParseVary(t *testing.T) {
 	}
 }
 
-func TestVary_Key(t *testing.T) {
+func TestVary_Equals(t *testing.T) {
+	type args struct {
+		vary httpcache.Vary
+		h1   http.Header
+		h2   http.Header
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "empty",
+			want: true,
+		},
+		{
+			name: "matching",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					"Header-1":     []string{"Header-1-Value-1"},
+					"Header-2":     []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Extra-Header": []string{"Extra-Header-Value-1"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "different contents",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					// First character in value has lower case
+					"Header-1": []string{"header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+			},
+		},
+		{
+			name: "missing header",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+				},
+			},
+		},
+		{
+			name: "missing header value",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-2"},
+				},
+			},
+		},
+		{
+			name: "missing empty header value",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					// Second value is empty
+					"Header-2": []string{"Header-2-Value-1", ""},
+				},
+				h2: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-2"},
+				},
+			},
+		},
+		{
+			name: "wrong header value order",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-2", "Header-2-Value-1"},
+				},
+			},
+		},
+		{
+			name: "too many values",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2"},
+				h1: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+				},
+				h2: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2", "Header-2-Value-2"},
+				},
+			},
+		},
+
+		{
+			name: "wildcard",
+			args: args{
+				vary: httpcache.Vary{"Header-1", "header-2", "*"},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.args.vary.Equals(tt.args.h1, tt.args.h2)
+			if got != tt.want {
+				t.Errorf("Vary.Equals() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVary_Take(t *testing.T) {
 	type args struct {
 		vary   httpcache.Vary
 		header http.Header
@@ -933,75 +1067,86 @@ func TestVary_Key(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    string
+		want    http.Header
 		wantNil bool
 	}{
 		{
-			name:    `empty`,
+			name: "empty",
+			args: args{
+				header: http.Header{
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": []string{"Header-3-Value-1"},
+				},
+			},
+			want:    nil,
 			wantNil: true,
 		},
 		{
-			name: `existing header`,
+			name: "all found",
 			args: args{
-				vary: httpcache.Vary{"Header-1", "Header-2"},
+				vary: httpcache.Vary{"Header-1", "header-2"},
 				header: http.Header{
-					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
-					"Header-2": {"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": []string{"Header-3-Value-1"},
 				},
 			},
-			want: `1775c79cde57a75e2fc3bd35b7e58a74c214dabb`,
+			want: http.Header{
+				"Header-1": []string{"Header-1-Value-1"},
+				"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+			},
 		},
 		{
-			name: `non-existing header`,
+			name: "some found",
 			args: args{
-				vary: httpcache.Vary{"Header-1", "Header-2"},
+				vary: httpcache.Vary{"Header-1", "header-4"},
 				header: http.Header{
-					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": []string{"Header-3-Value-1"},
 				},
 			},
-			want: `b071dc8a0b2b5f8aa80e371a7e446c4b8586f011`,
+			want: http.Header{
+				"Header-1": []string{"Header-1-Value-1"},
+			},
 		},
 		{
-			name: `mix of existing and non-existing headers`,
+			name: "none found",
 			args: args{
-				vary: httpcache.Vary{"Header-1", "Header-2"},
+				vary: httpcache.Vary{"Header-4"},
 				header: http.Header{
-					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
-					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": []string{"Header-3-Value-1"},
 				},
 			},
-			want: `4d7b2c07922f0a25128d08de082c1a146956bbe5`,
+			want: http.Header{},
 		},
+
 		{
-			name: `mix of existing and empty headers`,
+			name: "wildcard",
 			args: args{
-				vary: httpcache.Vary{"Header-1", "Header-2"},
+				vary: httpcache.Vary{"Header-1", "header-2", "*"},
 				header: http.Header{
-					"Header-1": {"Header-1-Value-1", "Header-1-Value-2"},
-					"Header-2": {""},
-					"Header-3": {"Header-3-Value-1", "Header-3-Value-3"},
+					"Header-1": []string{"Header-1-Value-1"},
+					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
+					"Header-3": []string{"Header-3-Value-1"},
 				},
 			},
-			want: `f054b248f9fbf25a9712d9e3dfeb84f087bcff18`,
-		},
-		{
-			name: `wildcard`,
-			args: args{
-				vary: httpcache.Vary{"*"},
-			},
+			want:    nil,
 			wantNil: true,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.args.vary.Key(nil, tt.args.header)
+			got := tt.args.vary.Take(tt.args.header)
 			if (got == nil) != tt.wantNil {
-				t.Errorf("Vary.Key() got = %x, want nil", string(got))
+				t.Errorf("Vary.Take() got = %v, want nil", got)
 			}
-			encoded := hex.EncodeToString(got)
-			if encoded != tt.want {
-				t.Errorf("Vary.Key() got = %v, want %v", encoded, tt.want)
+			if !headerEqual(got, tt.want) {
+				t.Errorf("Vary.Take() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
