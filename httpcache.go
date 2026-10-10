@@ -18,13 +18,11 @@ import (
 
 // Config defines characteristics of the cache based on which cacheability can be calculated.
 type Config struct {
-	// TODO: Implement
 	// Name is the name of the cache for use in the Cache-Status header.
 	//
 	// If empty, defaults to "cache".
 	Name string
 
-	// TODO: Implement
 	// AddCacheStatus can be set to true to set the Cache-Status header as specified in RFC 9211.
 	AddCacheStatus bool
 
@@ -1097,7 +1095,6 @@ var (
 func ParseStatus(header string) (Status, error) {
 	item, err := httpsfv.Parse[httpsfv.Item](header)
 	if err != nil {
-		// TODO: Test
 		return Status{}, err
 	}
 
