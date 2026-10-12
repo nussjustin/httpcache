@@ -172,8 +172,6 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 			// Avoid cloning request if we do not modify it
 			if etag != "" || lastModified != "" {
-				req = req.Clone(req.Context())
-
 				if etag != "" {
 					req.Header.Set("If-None-Match", strings.TrimPrefix(etag, "W/"))
 				}
