@@ -70,7 +70,7 @@ func Parse(s string) iter.Seq2[Directive, error] {
 					}
 
 					name += token.Text
-				default:
+				case TokenTypeInvalid:
 					panic("unreachable")
 				}
 			case stateValue:
@@ -97,7 +97,7 @@ func Parse(s string) iter.Seq2[Directive, error] {
 					}
 
 					value += token.Text
-				default:
+				case TokenTypeInvalid:
 					panic("unreachable")
 				}
 			}
@@ -152,7 +152,11 @@ func ParseTargeted(s string) iter.Seq2[Directive, error] {
 				d.Value, d.HasValue = i.String(), true
 			case httpsfv.BareItemTypeToken:
 				d.Value, d.HasValue = i.Token(), true
-			default:
+			case httpsfv.BareItemTypeInvalid,
+				httpsfv.BareItemTypeByteSequence,
+				httpsfv.BareItemTypeDate,
+				httpsfv.BareItemTypeDecimal,
+				httpsfv.BareItemTypeDisplayString:
 				if !yield(Directive{}, fmt.Errorf("directive %q has unexpected type %s", k, i.Type())) {
 					return
 				}

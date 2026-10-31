@@ -167,6 +167,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		case FreshnessStale:
 			status.Forwarded = ForwardedReasonStale
 
+			//nolint:canonicalheader
 			etag := stored.Header.Get("Etag")
 			lastModified := stored.Header.Get("Last-Modified")
 
@@ -358,7 +359,6 @@ func (m *memoryStore) Set(
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		// TODO: Test
 		return err
 	}
 

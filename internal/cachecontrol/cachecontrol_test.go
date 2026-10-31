@@ -5,10 +5,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nussjustin/httpcache/internal/cachecontrol"
+	"github.com/google/go-cmp/cmp"
 	"github.com/nussjustin/httpsfv"
 
-	"github.com/google/go-cmp/cmp"
+	"github.com/nussjustin/httpcache/internal/cachecontrol"
 )
 
 func TestParse(t *testing.T) {

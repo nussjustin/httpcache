@@ -6,8 +6,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/nussjustin/httpcache"
 	"github.com/nussjustin/httpsfv"
+
+	"github.com/nussjustin/httpcache"
 )
 
 func TestParseNoVarySearch(t *testing.T) {
@@ -58,6 +59,7 @@ func TestParseNoVarySearch(t *testing.T) {
 		{
 			name: "params with encoded keys",
 			in:   []string{`params=("%C3%A9+%E6%B0%97")`},
+			//nolint:gosmopolitan
 			want: httpcache.URLVariationConfig{NoVaryParams: []string{"é 気"}, VaryOnKeyOrder: true, VaryParamsWildcard: true},
 		},
 		{
@@ -74,6 +76,7 @@ func TestParseNoVarySearch(t *testing.T) {
 		{
 			name: "except with encoded keys",
 			in:   []string{`except=("%C3%A9+%E6%B0%97")`},
+			//nolint:gosmopolitan
 			want: httpcache.URLVariationConfig{VaryParams: []string{"é 気"}, VaryOnKeyOrder: true, NoVaryParamsWildcard: true},
 		},
 		{

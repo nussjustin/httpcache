@@ -133,6 +133,7 @@ func withRespStatus(code int) respOpt {
 	}
 }
 
+// bodyclose:handled
 func newResp(opts ...respOpt) *http.Response {
 	resp := &http.Response{Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}
 
@@ -826,6 +827,10 @@ func TestClient_Do(t *testing.T) {
 						},
 					}).Do(tx.req)
 
+					if resp != nil && resp.Body != nil {
+						_ = resp.Body.Close()
+					}
+
 					if (err != nil) != tx.wantRespErr {
 						t.Errorf("Tx %d: Do() error = %v, wantErr = %v", i, err, tx.wantRespErr)
 						return
@@ -1024,6 +1029,10 @@ func TestMemoryStore(t *testing.T) {
 				time.Sleep(time.Minute)
 
 				gotResp, gotErr := s.Get(t.Context(), tt.fetchedReq)
+
+				if gotResp != nil && gotResp.Body != nil {
+					_ = gotResp.Body.Close()
+				}
 
 				if gotErr != nil {
 					t.Fatalf("Get() error = %v, want nil", gotErr)

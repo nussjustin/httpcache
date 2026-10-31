@@ -207,8 +207,10 @@ func parseNoVaryKey(keyString string) string {
 	return keyStringDecoded
 }
 
-type urlDecodedPair [2]string
-type urlDecodedPairs []urlDecodedPair
+type (
+	urlDecodedPair  [2]string
+	urlDecodedPairs []urlDecodedPair
+)
 
 func (ps urlDecodedPairs) except(params []string) urlDecodedPairs {
 	ps2 := ps[:0]
@@ -297,6 +299,7 @@ func percentDecode(input []byte) []byte {
 	// 1. Let output be an empty byte sequence.
 	output := input[:0]
 
+	//nolint:dupword
 	// 2. For each byte byte in input:
 	for i := 0; i < len(input); i++ {
 		byte_ := input[i]

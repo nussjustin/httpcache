@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/nussjustin/httpcache"
 	"github.com/nussjustin/httpsfv"
+
+	"github.com/nussjustin/httpcache"
 )
 
 func TestConfig_AllowsStoringResponse(t *testing.T) {
@@ -650,7 +651,6 @@ func TestConfig_ParseResponseDirectives(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.config.ParseResponseDirectives(tt.headers)
-
 			if err != nil {
 				t.Fatalf("Config.ParseResponseDirectives() error = %v, want nil", err)
 			}
@@ -847,12 +847,12 @@ func TestParseExpires(t *testing.T) {
 		{
 			name: `correct case`,
 			in:   `Mon, 02 Jan 2006 15:04:05 GMT`,
-			want: time.Date(2006, time.January, 02, 15, 04, 05, 0, time.UTC),
+			want: time.Date(2006, time.January, 0o2, 15, 0o4, 0o5, 0, time.UTC),
 		},
 		{
 			name: `wrong case`,
 			in:   `mON, 02 Jan 2006 15:04:05 gmt`,
-			want: time.Date(2006, time.January, 02, 15, 04, 05, 0, time.UTC),
+			want: time.Date(2006, time.January, 0o2, 15, 0o4, 0o5, 0, time.UTC),
 		},
 		{
 			name:    `invalid day`,
@@ -1825,7 +1825,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			},
 		},
 		{
-			name: `duplicates duplicates with same max-/min- values`,
+			name: `duplicates with same max-/min- values`,
 			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
 				`max-age=100, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test2"`,
 			want: httpcache.ResponseDirectives{
@@ -2044,7 +2044,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 			},
 		},
 		{
-			name: `duplicates duplicates with same max-/min- values`,
+			name: `duplicates with same max-/min- values`,
 			in: `max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test", ` +
 				`max-age=100, must-revalidate, must-understand, no-cache="Header-5 Header-6", no-store, no-transform, private="Header-7 Header-8", proxy-revalidate, public, s-maxage=200, extra, extra-with-value="test2"`,
 			want: httpcache.ResponseDirectives{
@@ -2422,8 +2422,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 			name: `no s-maxage, no max-age, expires`,
 			args: args{
 				privateCache: true,
-				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:         time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 			},
 			want:   time.Minute,
 			wantOk: true,
@@ -2431,8 +2431,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 		{
 			name: `no s-maxage, no max-age, expires, shared`,
 			args: args{
-				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:    time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 			},
 			want:   time.Minute,
 			wantOk: true,
@@ -2442,8 +2442,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 			name: `no s-maxage, max-age, expires`,
 			args: args{
 				privateCache: true,
-				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:         time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 				maxAge:       OptValue(5 * time.Second),
 			},
 			want:   5 * time.Second,
@@ -2452,8 +2452,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 		{
 			name: `no s-maxage, max-age, expires, shared`,
 			args: args{
-				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:    time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 				maxAge:  OptValue(5 * time.Second),
 			},
 			want:   5 * time.Second,
@@ -2464,8 +2464,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 			name: `s-maxage, max-age, expires`,
 			args: args{
 				privateCache: true,
-				date:         time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires:      time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:         time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires:      time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 				maxAge:       OptValue(5 * time.Second),
 				sMaxAge:      OptValue(10 * time.Second),
 			},
@@ -2475,8 +2475,8 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 		{
 			name: `s-maxage, max-age, expires, shared`,
 			args: args{
-				date:    time.Date(2006, time.January, 2, 15, 04, 05, 0, time.UTC),
-				expires: time.Date(2006, time.January, 2, 15, 05, 05, 0, time.UTC),
+				date:    time.Date(2006, time.January, 2, 15, 0o4, 0o5, 0, time.UTC),
+				expires: time.Date(2006, time.January, 2, 15, 0o5, 0o5, 0, time.UTC),
 				maxAge:  OptValue(5 * time.Second),
 				sMaxAge: OptValue(10 * time.Second),
 			},

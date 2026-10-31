@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nussjustin/httpcache/internal/cachecontrol"
 	"github.com/nussjustin/httpsfv"
+
+	"github.com/nussjustin/httpcache/internal/cachecontrol"
 )
 
 // Config defines characteristics of the cache based on which cacheability can be calculated.
@@ -425,7 +426,7 @@ func ParseAge(s string) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	if int64(d) < 0 || int64(d) > math.MaxInt64/int64(time.Second) {
+	if d > uint64(math.MaxInt64/int64(time.Second)) {
 		return time.Duration(math.MaxInt64), nil
 	}
 	return time.Duration(d) * time.Second, nil
@@ -525,7 +526,7 @@ func ParseVary(lines []string) Vary {
 
 	last := 0
 
-	for i := range len(headers) {
+	for i := range headers {
 		if headers[i] == headers[last] {
 			continue
 		}
@@ -1105,7 +1106,13 @@ func ParseStatus(header string) (Status, error) {
 		s.Cache = item.String()
 	case httpsfv.BareItemTypeToken:
 		s.Cache = item.Token()
-	default:
+	case httpsfv.BareItemTypeInvalid,
+		httpsfv.BareItemTypeBoolean,
+		httpsfv.BareItemTypeByteSequence,
+		httpsfv.BareItemTypeDate,
+		httpsfv.BareItemTypeDecimal,
+		httpsfv.BareItemTypeDisplayString,
+		httpsfv.BareItemTypeInteger:
 		return Status{}, fmt.Errorf("invalid structured header item type %s", t)
 	}
 
@@ -1270,7 +1277,7 @@ const (
 	ForwardedReasonVaryMiss ForwardedReason = "vary-miss"
 
 	// ForwardedReasonMiss is set when the cache did not contain any responses that could be used to satisfy this
-	// request (to be used when an implementation cannot distinguish between uri-miss and vary-miss).;
+	// request (to be used when an implementation cannot distinguish between uri-miss and vary-miss).
 	ForwardedReasonMiss ForwardedReason = "miss"
 
 	// ForwardedReasonRequest is set when the cache was able to select a fresh response for the request, but the
