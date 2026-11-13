@@ -224,7 +224,10 @@ func FuzzParse(f *testing.F) {
 	f.Add(`private, no-cache, no-store="header1 header2 header3\ header4\"`)
 
 	f.Fuzz(func(t *testing.T, input string) {
-		for range cachecontrol.Parse(input) {
+		for _, err := range cachecontrol.Parse(input) {
+			if err != nil {
+				t.Error(err)
+			}
 		}
 	})
 }
