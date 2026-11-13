@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -40,6 +41,55 @@ type roundTripperFunc func(req *http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type testStore struct {
+	entriesMu sync.Mutex
+	entries   map[string]*testStoreEntry
+}
+
+type testStoreEntry struct {
+	resp     *http.Response
+	respTime time.Time
+}
+
+func (t *testStore) key(req *http.Request) string {
+	// The query is handled by the URLVariationCOnfig
+	urlWithoutQuery := *req.URL
+	urlWithoutQuery.RawQuery = ""
+	return req.Method + " " + urlWithoutQuery.String()
+}
+
+func (t *testStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
+	key := t.key(req)
+
+	t.entriesMu.Lock()
+	defer t.entriesMu.Unlock()
+
+	e := t.entries[key]
+	if e == nil {
+		return nil, nil
+	}
+
+	resp = e.resp
+	resp.Header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
+
+	return resp, nil
+}
+
+func (t *testStore) Set(_ context.Context, req *http.Request, _ time.Time, resp *http.Response, respTime time.Time) error {
+	key := t.key(req)
+
+	t.entriesMu.Lock()
+	defer t.entriesMu.Unlock()
+
+	if t.entries == nil {
+		t.entries = make(map[string]*testStoreEntry)
+	}
+
+	t.entries[key] = &testStoreEntry{resp: resp, respTime: respTime}
+
+	return nil
 }
 
 type trackingStore struct {
@@ -790,7 +840,7 @@ func TestClient_Do(t *testing.T) {
 				tt.config.AddCacheStatus = withCacheStatus
 				tt.config.Name = "my-cache"
 
-				memStore := httpcache.NewMemoryStore()
+				var store testStore
 
 				for i, tx := range tt.txs {
 					if tx.resp != nil {
@@ -798,7 +848,7 @@ func TestClient_Do(t *testing.T) {
 					}
 
 					store := &trackingStore{
-						Store:       memStore,
+						Store:       &store,
 						failOnGet:   tx.failOnGet,
 						failOnStore: tx.failOnStore,
 					}
@@ -873,185 +923,6 @@ func TestClient_Do(t *testing.T) {
 
 		t.Run(tt.name+" (with cache status)", func(t *testing.T) {
 			run(t, true)
-		})
-	}
-}
-
-func TestMemoryStore(t *testing.T) {
-	tests := []struct {
-		name         string
-		storedReq    *http.Request
-		storedResp   *http.Response
-		fetchedReq   *http.Request
-		wantResp     *http.Response
-		wantStoreErr bool
-	}{
-		{
-			name:      "match",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(),
-			wantResp: newResp(
-				withRespHeader("Age", "60"),
-				withRespHeader("Transaction-Id", "0")),
-		},
-		{
-			name:      "mismatched method",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(withReqMethod("HEAD")),
-		},
-		{
-			name:      "mismatched url",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(withReqUrl("https://example.com/")),
-		},
-		{
-			name: "vary match",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-			fetchedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Changed value")),
-			wantResp: newResp(
-				withRespHeader("Age", "60"),
-				withRespHeader("Transaction-Id", "0"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-		},
-		{
-			name: "vary mismatch",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Changed value"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-			fetchedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-		},
-		{
-			name: "vary wildcard",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Transaction-Id", "0"),
-				withRespHeader("Vary", "*")),
-			fetchedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-		},
-		{
-			name:      "no-vary-search",
-			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(withReqUrl("https://example.com/?c=3&a=1")),
-			wantResp: newResp(
-				withRespHeader("Age", "60"),
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
-				withRespHeader("Transaction-Id", "0")),
-		},
-		{
-			name:      "no-vary-search miss",
-			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("No-Vary-Search", "key-order, params=(\"b\")"),
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(withReqUrl("https://example.com/?c=3&a=2")),
-		},
-		{
-			name:      "invalid no-vary-search",
-			storedReq: newReq(withReqUrl("https://example.com/?a=1&b=2&c=3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("No-Vary-Search", "key-order=invalid"),
-				withRespHeader("Transaction-Id", "0")),
-			wantStoreErr: true,
-		},
-		{
-			name:      "expired",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("Transaction-Id", "0")),
-			fetchedReq: newReq(),
-			wantResp: newResp(
-				withRespHeader("Age", "60"),
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("Transaction-Id", "0")),
-		},
-		{
-			name:      "body read error",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespBody(errReader{}),
-				withRespHeader("Cache-Control", "public, max-age=30"),
-				withRespHeader("Transaction-Id", "0")),
-			wantStoreErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				s := httpcache.NewMemoryStore()
-
-				if err := s.Set(t.Context(), tt.storedReq, time.Now(), tt.storedResp, time.Now()); err != nil {
-					if tt.wantStoreErr {
-						return
-					}
-					t.Fatalf("Set() error = %v, want nil", err)
-				}
-
-				if tt.wantStoreErr {
-					t.Fatal("Set() error = nil, want non-nil")
-				}
-
-				time.Sleep(time.Minute)
-
-				gotResp, gotErr := s.Get(t.Context(), tt.fetchedReq)
-
-				if gotResp != nil && gotResp.Body != nil {
-					_ = gotResp.Body.Close()
-				}
-
-				if gotErr != nil {
-					t.Fatalf("Get() error = %v, want nil", gotErr)
-				}
-
-				if (tt.wantResp == nil) != (gotResp == nil) {
-					t.Fatalf("Get() got resp = %#v, want %#v", gotResp, tt.wantResp)
-				}
-
-				if tt.wantResp != nil {
-					if got, want := gotResp.StatusCode, tt.wantResp.StatusCode; got != want {
-						t.Errorf("Get() Response.StatusCode = %d, want %d", got, want)
-					}
-
-					if got, want := gotResp.Header, tt.wantResp.Header; want != nil && !headerEqual(got, want) {
-						t.Errorf("Get() Response.Header = %#v, want %#v", got, want)
-					}
-				}
-			})
 		})
 	}
 }

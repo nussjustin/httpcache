@@ -5,10 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -34,14 +31,6 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-func cloneHeader(h http.Header) http.Header {
-	h2 := make(http.Header, len(h))
-	for k, v := range h {
-		h2[k] = slices.Clone(v)
-	}
-	return h2
-}
-
 func cloneResponse(resp *http.Response) (*http.Response, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -56,10 +45,10 @@ func cloneResponse(resp *http.Response) (*http.Response, error) {
 		Proto:         resp.Proto,
 		ProtoMajor:    resp.ProtoMajor,
 		ProtoMinor:    resp.ProtoMinor,
-		Header:        cloneHeader(resp.Header),
+		Header:        resp.Header.Clone(),
 		Body:          io.NopCloser(bytes.NewBuffer(body)),
 		ContentLength: int64(len(body)),
-		Trailer:       cloneHeader(resp.Trailer),
+		Trailer:       resp.Trailer.Clone(),
 	}, nil
 }
 
@@ -265,137 +254,4 @@ type Store interface {
 		req *http.Request, reqTime time.Time,
 		resp *http.Response, respTime time.Time,
 	) error
-}
-
-type memoryStore struct {
-	entriesMu sync.RWMutex
-	entries   map[string][]*memoryStoreEntry
-}
-
-type memoryStoreEntry struct {
-	req                http.Request
-	reqTime            time.Time
-	resp               http.Response
-	respBody           []byte
-	respTime           time.Time
-	urlVariationConfig URLVariationConfig
-	vary               Vary
-	varyHeaders        http.Header
-}
-
-// NewMemoryStore returns a Store that stores responses in memory.
-//
-// This is only meant for testing.
-//
-// There is no limit to the number of stored responses, and expired responses are never removed.
-func NewMemoryStore() Store {
-	return &memoryStore{}
-}
-
-func (m *memoryStore) key(req *http.Request) string {
-	// The query is handled by the URLVariationCOnfig
-	urlWithoutQuery := *req.URL
-	urlWithoutQuery.RawQuery = ""
-	return req.Method + " " + urlWithoutQuery.String()
-}
-
-func (m *memoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
-	key := m.key(req)
-
-	m.entriesMu.RLock()
-	defer m.entriesMu.RUnlock()
-
-	entries := m.entries[key]
-
-	for _, entry := range entries {
-		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
-			continue
-		}
-
-		if !entry.vary.Equals(entry.varyHeaders, req.Header) {
-			continue
-		}
-
-		return entry.restore(), nil
-	}
-
-	return nil, nil
-}
-
-func (e *memoryStoreEntry) restore() *http.Response {
-	header := cloneHeader(e.resp.Header)
-	header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
-
-	return &http.Response{
-		Status:        e.resp.Status,
-		StatusCode:    e.resp.StatusCode,
-		Proto:         e.resp.Proto,
-		ProtoMajor:    e.resp.ProtoMajor,
-		ProtoMinor:    e.resp.ProtoMinor,
-		Header:        header,
-		Body:          io.NopCloser(bytes.NewReader(e.respBody)),
-		ContentLength: int64(len(e.respBody)),
-		Trailer:       cloneHeader(e.resp.Trailer),
-	}
-}
-
-func (m *memoryStore) Set(
-	_ context.Context,
-	req *http.Request, reqTime time.Time,
-	resp *http.Response, respTime time.Time,
-) error {
-	vary := ParseVary(resp.Header["Vary"])
-
-	if vary.Wildcard() {
-		return nil
-	}
-
-	urlVariationConfig, err := ParseNoVarySearch(resp.Header.Values("No-Vary-Search"))
-	if err != nil {
-		return err
-	}
-
-	key := m.key(req)
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	entry := &memoryStoreEntry{
-		req:                *req,
-		reqTime:            reqTime,
-		resp:               *resp,
-		respBody:           respBody,
-		respTime:           respTime,
-		urlVariationConfig: urlVariationConfig,
-		vary:               vary,
-		varyHeaders:        vary.Take(req.Header),
-	}
-
-	// Note: Use URL.Clone once Go 1.27 is required.
-	entry.req.URL = new(*req.URL)
-	if entry.req.URL.User != nil {
-		entry.req.URL.User = new(*entry.req.URL.User)
-	}
-
-	m.entriesMu.Lock()
-	defer m.entriesMu.Unlock()
-
-	entries := m.entries[key]
-
-	for i := range entries {
-		if vary.Equals(entries[i].varyHeaders, entry.varyHeaders) {
-			entries[i] = entry
-			return nil
-		}
-	}
-
-	if m.entries == nil {
-		m.entries = make(map[string][]*memoryStoreEntry)
-	}
-
-	m.entries[key] = append(entries, entry)
-
-	return nil
 }
