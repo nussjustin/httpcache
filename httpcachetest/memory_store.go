@@ -33,10 +33,14 @@ type memoryStoreEntry struct {
 }
 
 func (m *MemoryStore) key(req *http.Request) string {
+	method := req.Method
+	if req.Method == "HEAD" {
+		method = "GET"
+	}
 	// The query is handled by the URLVariationCOnfig
 	urlWithoutQuery := *req.URL
 	urlWithoutQuery.RawQuery = ""
-	return req.Method + " " + urlWithoutQuery.String()
+	return method + " " + urlWithoutQuery.String()
 }
 
 func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {

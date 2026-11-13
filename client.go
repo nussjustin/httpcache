@@ -227,14 +227,19 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 // Store defines the interface used by [Client] for storing and retrieving responses.
 //
-// A store must handle storing and retrieving requests based on their method and URL, while also respecting the
-// No-Vary-Search header, as well as the Vary header.
+// A store must handle storing and retrieving requests based on
 //
-// No-Vary-Search handling can be implemented via [ParseNoVarySearch] and [URLVariationConfig.Equals].
+//   - method, with HEAD also matching GET requests
+//   - URL
+//   - the No-Vary-Search header
+//   - the Vary header
 //
-// Support for the Vary header can be implemented via [ParseVary], [Vary.Take] and [Vary.Equals].
+// A Store should still return an expired response, if possible, in order to support stale responses.
 //
-// A store must be safe for concurrent use by multiple goroutines.
+// The [github.com/nussjustin/httpcache/httpcachetest.TestStore] function can be used to test that a store
+// implementation conforms to these expectations.
+//
+// Implementations must be safe for concurrent use by multiple goroutines.
 type Store interface {
 	// Get returns the stored response matching the given request.
 	//
