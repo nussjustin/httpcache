@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -14,7 +16,8 @@ import (
 
 // MemoryStore implements a [github.com/nussjustin/httpcache.Store] that stores all responses in memory.
 //
-// The store has no limits on the number of stored responses and never removes expired responses.
+// The store has no limits on the number of stored responses and never removes expired responses, unless explicitly
+// requested by calling [MemoryStore.Prune].
 //
 // The zero value is safe for use and is equivalent to calling [NewMemoryStore] with a zero [MemoryStoreOpts].
 type MemoryStore struct {
@@ -62,44 +65,6 @@ type memoryStoreEntry struct {
 	vary               httpcache.Vary
 }
 
-func (m *MemoryStore) key(req *http.Request) string {
-	method := req.Method
-	if req.Method == "HEAD" {
-		method = "GET"
-	}
-	// The query is handled by the URLVariationCOnfig
-	urlWithoutQuery := *req.URL
-	urlWithoutQuery.RawQuery = ""
-	return method + " " + urlWithoutQuery.String()
-}
-
-func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
-	key := m.key(req)
-
-	m.entriesMu.RLock()
-	defer m.entriesMu.RUnlock()
-
-	entries := m.entries[key]
-
-	for _, entry := range entries {
-		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
-			continue
-		}
-
-		if !entry.vary.Equals(entry.req.Header, req.Header) {
-			continue
-		}
-
-		if !m.shouldReturnExpired(entry) {
-			return nil, nil
-		}
-
-		return entry.restore(), nil
-	}
-
-	return nil, nil
-}
-
 func (e *memoryStoreEntry) age() time.Duration {
 	now := time.Now()
 
@@ -114,6 +79,32 @@ func (e *memoryStoreEntry) age() time.Duration {
 		age,
 		e.respTime,
 		e.respTime)
+}
+
+func (e *memoryStoreEntry) freshness(privateCache bool, extraMaxAge time.Duration) httpcache.Freshness {
+	age := e.age()
+	date, _ := http.ParseTime(e.resp.Header.Get("Date"))
+	expires, _ := httpcache.ParseExpires(e.resp.Header.Get("Expires"))
+
+	respDirectives, _ := httpcache.ParseResponseDirectives(e.resp.Header.Get("Cache-Control"))
+
+	freshnessLifetime, _ := httpcache.CalculateFreshnessLifetime(
+		privateCache,
+		date,
+		expires,
+		respDirectives.MaxAge,
+		respDirectives.SMaxAge)
+
+	var minFresh, maxAge, maxStale httpcache.Opt[time.Duration]
+
+	maxAge.Value, maxAge.Valid = freshnessLifetime+extraMaxAge-1, true
+
+	return httpcache.CalculateFreshness(
+		age,
+		freshnessLifetime,
+		minFresh,
+		maxAge,
+		maxStale)
 }
 
 func (e *memoryStoreEntry) restore() *http.Response {
@@ -133,38 +124,74 @@ func (e *memoryStoreEntry) restore() *http.Response {
 	}
 }
 
-func (m *MemoryStore) shouldReturnExpired(e *memoryStoreEntry) bool {
-	if !m.opts.ReturnNilForExpiredResponses {
-		return true
+func (m *MemoryStore) key(req *http.Request) string {
+	method := req.Method
+	if req.Method == "HEAD" {
+		method = "GET"
 	}
-
-	age := e.age()
-	date, _ := http.ParseTime(e.resp.Header.Get("Date"))
-	expires, _ := httpcache.ParseExpires(e.resp.Header.Get("Expires"))
-
-	respDirectives, _ := httpcache.ParseResponseDirectives(e.resp.Header.Get("Cache-Control"))
-
-	freshnessLifetime, _ := httpcache.CalculateFreshnessLifetime(
-		m.opts.Private,
-		date,
-		expires,
-		respDirectives.MaxAge,
-		respDirectives.SMaxAge)
-
-	var minFresh, maxAge, maxStale httpcache.Opt[time.Duration]
-
-	maxAge.Value, maxAge.Valid = freshnessLifetime+m.opts.ReturnNilForExpiredResponsesAfter-1, true
-
-	freshness := httpcache.CalculateFreshness(
-		age,
-		freshnessLifetime,
-		minFresh,
-		maxAge,
-		maxStale)
-
-	return freshness != httpcache.FreshnessExpired
+	// The query is handled by the URLVariationCOnfig
+	urlWithoutQuery := *req.URL
+	urlWithoutQuery.RawQuery = ""
+	return method + " " + urlWithoutQuery.String()
 }
 
+// Clear clears the store, removing all stored responses.
+func (m *MemoryStore) Clear() {
+	m.entriesMu.Lock()
+	defer m.entriesMu.Unlock()
+
+	clear(m.entries)
+}
+
+// Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
+func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
+	key := m.key(req)
+
+	m.entriesMu.RLock()
+	defer m.entriesMu.RUnlock()
+
+	entries := m.entries[key]
+
+	for _, entry := range entries {
+		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
+			continue
+		}
+
+		if !entry.vary.Equals(entry.req.Header, req.Header) {
+			continue
+		}
+
+		if m.opts.ReturnNilForExpiredResponses {
+			freshness := entry.freshness(m.opts.Private, m.opts.ReturnNilForExpiredResponsesAfter)
+
+			if freshness == httpcache.FreshnessExpired {
+				return nil, nil
+			}
+		}
+
+		return entry.restore(), nil
+	}
+
+	return nil, nil
+}
+
+// Prune removes all expired responses from the store.
+func (m *MemoryStore) Prune() {
+	m.entriesMu.Lock()
+	defer m.entriesMu.Unlock()
+
+	for key, entries := range m.entries {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+			return entry.freshness(m.opts.Private, 0) == httpcache.FreshnessExpired
+		})
+	}
+
+	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+		return len(entries) == 0
+	})
+}
+
+// Set implements the [github.com/nussjustin/httpcache.Store.Set] method.
 func (m *MemoryStore) Set(
 	_ context.Context,
 	req *http.Request, reqTime time.Time,
@@ -183,9 +210,13 @@ func (m *MemoryStore) Set(
 
 	key := m.key(req)
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	var respBody []byte
+
+	if resp.Body != nil {
+		var err error
+		if respBody, err = io.ReadAll(resp.Body); err != nil {
+			return err
+		}
 	}
 
 	entry := &memoryStoreEntry{
