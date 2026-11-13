@@ -16,10 +16,40 @@ import (
 //
 // The store has no limits on the number of stored responses and never removes expired responses.
 //
-// The zero value is safe for use.
+// The zero value is safe for use and is equivalent to calling [NewMemoryStore] with a zero [MemoryStoreOpts].
 type MemoryStore struct {
+	opts MemoryStoreOpts
+
 	entriesMu sync.RWMutex
 	entries   map[string][]*memoryStoreEntry
+}
+
+// MemoryStoreOpts can be used to configure a [MemoryStore].
+//
+// The zero value is a valid configuration and should be good enough for most cases.
+type MemoryStoreOpts struct {
+	// Private should be set to true if the cache is considered private.
+	//
+	// This is used when calculating freshness for expired items. See [MemoryStoreOpts.ReturnNilForExpiredResponses].
+	Private bool
+
+	// ReturnNilForExpiredResponses, if true, causes [MemoryStore.Get] to return (nil, nil) once a response is expired
+	// for at least ReturnNilForExpiredResponsesAfter.
+	ReturnNilForExpiredResponses bool
+
+	// ReturnNilForExpiredResponsesAfter is the duration after which an expired response is no longer returned.
+	ReturnNilForExpiredResponsesAfter time.Duration
+
+	// ValidateNoVarySearch, if true, causes [MemoryStore.Set] to return an error when the response contains an invalid
+	// No-Vary-Search header.
+	//
+	// By default, the store will ignore an invalid header instead.
+	ValidateNoVarySearch bool
+}
+
+// NewMemoryStore returns a new [MemoryStore] using the given options.
+func NewMemoryStore(opts MemoryStoreOpts) *MemoryStore {
+	return &MemoryStore{opts: opts}
 }
 
 type memoryStoreEntry struct {
@@ -60,10 +90,30 @@ func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 			continue
 		}
 
+		if !m.shouldReturnExpired(entry) {
+			return nil, nil
+		}
+
 		return entry.restore(), nil
 	}
 
 	return nil, nil
+}
+
+func (e *memoryStoreEntry) age() time.Duration {
+	now := time.Now()
+
+	var age httpcache.Opt[time.Duration]
+	if date, err := http.ParseTime(e.resp.Header.Get("Date")); err == nil {
+		age.Value, age.Valid = now.Sub(date), true
+	}
+
+	return httpcache.CalculateAge(
+		now,
+		e.reqTime,
+		age,
+		e.respTime,
+		e.respTime)
 }
 
 func (e *memoryStoreEntry) restore() *http.Response {
@@ -83,6 +133,38 @@ func (e *memoryStoreEntry) restore() *http.Response {
 	}
 }
 
+func (m *MemoryStore) shouldReturnExpired(e *memoryStoreEntry) bool {
+	if !m.opts.ReturnNilForExpiredResponses {
+		return true
+	}
+
+	age := e.age()
+	date, _ := http.ParseTime(e.resp.Header.Get("Date"))
+	expires, _ := httpcache.ParseExpires(e.resp.Header.Get("Expires"))
+
+	respDirectives, _ := httpcache.ParseResponseDirectives(e.resp.Header.Get("Cache-Control"))
+
+	freshnessLifetime, _ := httpcache.CalculateFreshnessLifetime(
+		m.opts.Private,
+		date,
+		expires,
+		respDirectives.MaxAge,
+		respDirectives.SMaxAge)
+
+	var minFresh, maxAge, maxStale httpcache.Opt[time.Duration]
+
+	maxAge.Value, maxAge.Valid = freshnessLifetime+m.opts.ReturnNilForExpiredResponsesAfter-1, true
+
+	freshness := httpcache.CalculateFreshness(
+		age,
+		freshnessLifetime,
+		minFresh,
+		maxAge,
+		maxStale)
+
+	return freshness != httpcache.FreshnessExpired
+}
+
 func (m *MemoryStore) Set(
 	_ context.Context,
 	req *http.Request, reqTime time.Time,
@@ -95,7 +177,7 @@ func (m *MemoryStore) Set(
 	}
 
 	urlVariationConfig, err := httpcache.ParseNoVarySearch(resp.Header.Values("No-Vary-Search"))
-	if err != nil {
+	if err != nil && m.opts.ValidateNoVarySearch {
 		return err
 	}
 

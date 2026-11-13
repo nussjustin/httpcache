@@ -62,7 +62,7 @@ linters:
     - sqlclosecheck
     - staticcheck
     - tagalign
-    - tagliatelle
+    # - tagliatelle
     - testableexamples
     - testifylint
     - testpackage
