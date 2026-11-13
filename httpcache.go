@@ -27,6 +27,11 @@ type Config struct {
 	// AddCacheStatus can be set to true to set the Cache-Status header as specified in RFC 9211.
 	AddCacheStatus bool
 
+	// CacheableByExtensionFunc is an optional function that is called when checking if a response can be cached.
+	//
+	// If the function returns true, the response is considered cacheable.
+	CacheableByExtensionFunc func(*http.Response, ResponseDirectives) bool
+
 	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
 	//
 	// If nil, defaults to DefaultHeuristicallyCacheableStatusCodes.
@@ -168,7 +173,7 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 	// if the cache is shared: an s-maxage response directive (see Section 5.2.2.10);
 	case !c.Private && respDirectives.SMaxAge.Valid:
 	// a cache extension that allows it to be cached (see Section 5.2.3); or
-	case false: // not supported
+	case c.CacheableByExtensionFunc != nil && c.CacheableByExtensionFunc(resp, respDirectives):
 	// a status code that is defined as heuristically cacheable (see Section 4.2.2).
 	case c.isHeuristicallyCacheableStatusCode(resp.StatusCode):
 	default:

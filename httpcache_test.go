@@ -541,6 +541,52 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 			wantPublic:  false,
 			wantPrivate: false,
 		},
+		{
+			name: `cacheable with extension func`,
+			config: httpcache.Config{
+				CacheableByExtensionFunc: func(resp *http.Response, respDir httpcache.ResponseDirectives) bool {
+					for _, ext := range respDir.Extensions {
+						if ext.Name == "custom-directive" && ext.Value.Value == "true" {
+							return true
+						}
+					}
+
+					return false
+				},
+			},
+			resp: http.Response{
+				Header: http.Header{
+					"Cache-Control": []string{"custom-directive=true"},
+				},
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusInternalServerError,
+			},
+			wantPublic:  true,
+			wantPrivate: true,
+		},
+		{
+			name: `non-cacheable with extension func`,
+			config: httpcache.Config{
+				CacheableByExtensionFunc: func(resp *http.Response, respDir httpcache.ResponseDirectives) bool {
+					for _, ext := range respDir.Extensions {
+						if ext.Name == "custom-directive" && ext.Value.Value == "true" {
+							return true
+						}
+					}
+
+					return false
+				},
+			},
+			resp: http.Response{
+				Header: http.Header{
+					"Cache-Control": []string{"custom-directive=false"},
+				},
+				Request:    &http.Request{Method: "GET"},
+				StatusCode: http.StatusInternalServerError,
+			},
+			wantPublic:  false,
+			wantPrivate: false,
+		},
 	}
 
 	for _, tt := range tests {
