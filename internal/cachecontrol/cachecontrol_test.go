@@ -205,8 +205,12 @@ func BenchmarkParse(b *testing.B) {
 	for b.Loop() {
 		var got int
 
-		for range cachecontrol.Parse(`private, no-cache, no-store="header1 header2 header3"`) {
+		for _, err := range cachecontrol.Parse(`private, no-cache, no-store="header1 header2 header3"`) {
 			got++
+
+			if err != nil {
+				b.Fatal(err)
+			}
 		}
 
 		if want := 3; got != want {
