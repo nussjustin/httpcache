@@ -31,6 +31,10 @@ type MemoryStore struct {
 //
 // The zero value is a valid configuration and should be good enough for most cases.
 type MemoryStoreOpts struct {
+	// HeuristicFreshnessLifetime is the default freshness lifetime used when no max-age/s-maxage Cache-Control
+	// directives or Expire are set and is used for checking if a response is expired.
+	HeuristicFreshnessLifetime time.Duration
+
 	// Private should be set to true if the cache is considered private.
 	//
 	// This is used when calculating freshness for expired items. See [MemoryStoreOpts.ReturnNilForExpiredResponses].
@@ -81,7 +85,11 @@ func (e *memoryStoreEntry) age() time.Duration {
 		e.respTime)
 }
 
-func (e *memoryStoreEntry) freshness(privateCache bool, extraMaxAge time.Duration) httpcache.Freshness {
+func (e *memoryStoreEntry) freshness(
+	privateCache bool,
+	extraMaxAge time.Duration,
+	heuristicFreshnessLifetime time.Duration,
+) httpcache.Freshness {
 	age := e.age()
 	date, _ := http.ParseTime(e.resp.Header.Get("Date"))
 	expires, _ := httpcache.ParseExpires(e.resp.Header.Get("Expires"))
@@ -93,7 +101,12 @@ func (e *memoryStoreEntry) freshness(privateCache bool, extraMaxAge time.Duratio
 		date,
 		expires,
 		respDirectives.MaxAge,
-		respDirectives.SMaxAge)
+		respDirectives.SMaxAge,
+		httpcache.Opt[time.Duration]{
+			Value: heuristicFreshnessLifetime,
+			Valid: heuristicFreshnessLifetime > 0,
+		},
+	)
 
 	var minFresh, maxAge, maxStale httpcache.Opt[time.Duration]
 
@@ -162,7 +175,11 @@ func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 		}
 
 		if m.opts.ReturnNilForExpiredResponses {
-			freshness := entry.freshness(m.opts.Private, m.opts.ReturnNilForExpiredResponsesAfter)
+			freshness := entry.freshness(
+				m.opts.Private,
+				m.opts.ReturnNilForExpiredResponsesAfter,
+				m.opts.HeuristicFreshnessLifetime,
+			)
 
 			if freshness == httpcache.FreshnessExpired {
 				return nil, nil
@@ -182,7 +199,9 @@ func (m *MemoryStore) Prune() {
 
 	for key, entries := range m.entries {
 		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
-			return entry.freshness(m.opts.Private, 0) == httpcache.FreshnessExpired
+			freshness := entry.freshness(m.opts.Private, 0, m.opts.HeuristicFreshnessLifetime)
+
+			return freshness == httpcache.FreshnessExpired
 		})
 	}
 

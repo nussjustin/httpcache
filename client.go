@@ -130,12 +130,18 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 		respDirectives, _ := c.Config.ParseResponseDirectives(stored.Header)
 
+		heuristicFreshnessLifetime := Opt[time.Duration]{
+			Value: c.Config.HeuristicFreshnessLifetime,
+			Valid: c.Config.HeuristicFreshnessLifetime > 0,
+		}
+
 		freshnessLifetime, _ := CalculateFreshnessLifetime(
 			c.Config.Private,
 			date,
 			expires,
 			respDirectives.MaxAge,
-			respDirectives.SMaxAge)
+			respDirectives.SMaxAge,
+			heuristicFreshnessLifetime)
 
 		freshness := CalculateFreshness(
 			age,

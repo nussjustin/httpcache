@@ -2396,11 +2396,12 @@ func TestCalculateFreshness(t *testing.T) {
 
 func TestCalculateFreshnessLifetime(t *testing.T) {
 	type args struct {
-		privateCache bool
-		date         time.Time
-		expires      time.Time
-		maxAge       httpcache.Opt[time.Duration]
-		sMaxAge      httpcache.Opt[time.Duration]
+		privateCache               bool
+		date                       time.Time
+		expires                    time.Time
+		maxAge                     httpcache.Opt[time.Duration]
+		sMaxAge                    httpcache.Opt[time.Duration]
+		heuristicFreshnessLifetime httpcache.Opt[time.Duration]
 	}
 	tests := []struct {
 		name   string
@@ -2415,7 +2416,24 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 			},
 		},
 		{
+			name: `no s-maxage, no max-age, no expires, heuristic freshness lifetime`,
+			args: args{
+				privateCache:               true,
+				heuristicFreshnessLifetime: OptValue(30 * time.Second),
+			},
+			want:   30 * time.Second,
+			wantOk: true,
+		},
+		{
 			name: `no s-maxage, no max-age, no expires, shared`,
+		},
+		{
+			name: `no s-maxage, no max-age, no expires, shared, heuristic freshness lifetime`,
+			args: args{
+				heuristicFreshnessLifetime: OptValue(30 * time.Second),
+			},
+			want:   30 * time.Second,
+			wantOk: true,
 		},
 
 		{
@@ -2492,6 +2510,7 @@ func TestCalculateFreshnessLifetime(t *testing.T) {
 				tt.args.expires,
 				tt.args.maxAge,
 				tt.args.sMaxAge,
+				tt.args.heuristicFreshnessLifetime,
 			)
 			if got != tt.want {
 				t.Errorf("FreshnessLifetime() got = %v, want %v", got, tt.want)

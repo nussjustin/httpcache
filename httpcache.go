@@ -32,6 +32,10 @@ type Config struct {
 	// If nil, defaults to DefaultHeuristicallyCacheableStatusCodes.
 	HeuristicallyCacheableStatusCode []int
 
+	// HeuristicFreshnessLifetime is the default freshness lifetime used when no max-age/s-maxage Cache-Control
+	// directives or Expire are set.
+	HeuristicFreshnessLifetime time.Duration
+
 	// Private configures the cache to be private, as understood by RFC 9111.
 	Private bool
 
@@ -385,12 +389,15 @@ func CalculateFreshness(
 
 // CalculateFreshnessLifetime returns how long a response can be considered to be fresh, as defined in RFC 9111,
 // Section 4.2.
+//
+// Returns (0, false) if the freshness lifetime can not be calculated and no heuristic freshness lifetime is provided.
 func CalculateFreshnessLifetime(
 	privateCache bool,
 	date time.Time,
 	expires time.Time,
 	maxAge Opt[time.Duration],
 	sMaxAge Opt[time.Duration],
+	heuristicFreshnessLifetime Opt[time.Duration],
 ) (time.Duration, bool) {
 	// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
 	//
@@ -416,8 +423,11 @@ func CalculateFreshnessLifetime(
 
 	// Otherwise, no explicit expiration time is present in the response. A heuristic freshness lifetime might be
 	// applicable; see Section 4.2.2.
+	if heuristicFreshnessLifetime.Valid {
+		return heuristicFreshnessLifetime.Value, true
+	}
 
-	return 0, false // We do not support heuristic freshness lifetime
+	return 0, false
 }
 
 // ParseAge parses a duration in seconds e.g. from the HTTP Age header or the max-/min-* Cache-Control directives.

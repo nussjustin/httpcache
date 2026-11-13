@@ -833,6 +833,31 @@ func TestClient_Do(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:   "fresh cached response with heuristic freshness lifetime",
+			config: httpcache.Config{HeuristicFreshnessLifetime: 2 * time.Minute},
+			txs: []transaction{
+				{
+					req:             newReq(),
+					resp:            newResp(withRespHeader("Cache-Control", "public")),
+					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
+					wantStored:      1,
+					wantReq:         newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req:             newReq(),
+					wantCacheStatus: httpcache.Status{Cache: "my-cache", Hit: true, TTL: time.Minute},
+					wantReq:         newReq(),
+					wantResp: newResp(
+						withRespHeader("Age", "60"),
+						withRespHeader("Cache-Control", "public"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		run := func(t *testing.T, withCacheStatus bool) {
