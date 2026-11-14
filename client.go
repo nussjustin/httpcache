@@ -1,12 +1,12 @@
 package httpcache
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
 // Client wraps an existing [*net/http.Client] (or [http.DefaultClient]) adding caching of responses using a
@@ -29,27 +29,6 @@ type Client struct {
 // It is implemented by [http.DefaultClient].
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
-}
-
-func cloneResponse(resp *http.Response) (*http.Response, error) {
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	resp.Body = io.NopCloser(bytes.NewBuffer(body))
-
-	return &http.Response{
-		Status:        resp.Status,
-		StatusCode:    resp.StatusCode,
-		Proto:         resp.Proto,
-		ProtoMajor:    resp.ProtoMajor,
-		ProtoMinor:    resp.ProtoMinor,
-		Header:        resp.Header.Clone(),
-		Body:          io.NopCloser(bytes.NewBuffer(body)),
-		ContentLength: int64(len(body)),
-		Trailer:       resp.Trailer.Clone(),
-	}, nil
 }
 
 // Do serves the given request by first trying to use a cached response if possible and otherwise falling back to
@@ -216,7 +195,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	}
 
 	if c.Config.AllowsStoringResponse(resp) {
-		respCopy, err := cloneResponse(resp)
+		respCopy, err := httpcacheutil.CloneResponse(resp)
 		if err != nil {
 			return nil, Status{}, err
 		}
