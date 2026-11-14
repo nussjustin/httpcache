@@ -98,7 +98,9 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		return nil, Status{}, err
 	}
 
-	stored, err := c.Store.Get(req.Context(), reqData)
+	stored, detail, err := c.Store.Get(req.Context(), reqData)
+
+	status.Detail = detail
 
 	if stored != nil && err == nil {
 		age := stored.Age()

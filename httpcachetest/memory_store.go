@@ -42,6 +42,10 @@ type MemoryStoreOpts struct {
 	// This is used when calculating freshness for expired items. See [MemoryStoreOpts.ReturnNilForExpiredResponses].
 	Private bool
 
+	// ReturnDetailString enables returning details in [MemoryStore.Get] and [MemoryStore.Set] for use in the
+	// Cache-Status header.
+	ReturnDetailString bool
+
 	// ReturnNilForExpiredResponses, if true, causes [MemoryStore.Get] to return (nil, nil) once a response is expired
 	// for at least ReturnNilForExpiredResponsesAfter.
 	ReturnNilForExpiredResponses bool
@@ -123,6 +127,13 @@ func (e *memoryStoreEntry) freshness(
 
 var seed = maphash.MakeSeed()
 
+func (m *MemoryStore) detail(s string) string {
+	if m.opts.ReturnDetailString {
+		return s
+	}
+	return ""
+}
+
 func (m *MemoryStore) key(req httpcache.RequestData) string {
 	var h maphash.Hash
 	h.SetSeed(seed)
@@ -149,7 +160,7 @@ func (m *MemoryStore) Clear() {
 }
 
 // Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
-func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
+func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	key := m.key(req)
 
 	m.entriesMu.RLock()
@@ -174,14 +185,14 @@ func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 			)
 
 			if freshness == httpcache.FreshnessExpired {
-				return nil, nil
+				return nil, m.detail("expired"), nil
 			}
 		}
 
-		return &entry.resp, nil
+		return &entry.resp, "", nil
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
 // Prune removes all expired responses from the store.
@@ -203,16 +214,16 @@ func (m *MemoryStore) Prune() {
 }
 
 // Set implements the [github.com/nussjustin/httpcache.Store.Set] method.
-func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
+func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
 	vary := httpcache.ParseVary(resp.Header["Vary"])
 
 	if vary.Wildcard() {
-		return nil
+		return m.detail("Vary wildcard"), nil
 	}
 
 	urlVariationConfig, err := httpcache.ParseNoVarySearch(resp.Header.Values("No-Vary-Search"))
 	if err != nil && m.opts.ValidateNoVarySearch {
-		return err
+		return m.detail("invalid No-Vary-Search"), err
 	}
 
 	key := m.key(req)
@@ -232,7 +243,7 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 	for i := range entries {
 		if vary.Equals(entries[i].req.Header, entry.req.Header) {
 			entries[i] = entry
-			return nil
+			return "", nil
 		}
 	}
 
@@ -242,5 +253,5 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 
 	m.entries[key] = append(entries, entry)
 
-	return nil
+	return "", nil
 }

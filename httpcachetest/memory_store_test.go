@@ -21,6 +21,17 @@ func TestMemoryStore(t *testing.T) {
 		)
 	})
 
+	t.Run("ReturnDetailString", func(t *testing.T) {
+		httpcachetest.TestStore(t,
+			httpcachetest.TestStoreOpts{},
+			func() httpcache.Store {
+				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
+					ReturnDetailString: true,
+				})
+			},
+		)
+	})
+
 	t.Run("ReturnsNilForExpiredResponses", func(t *testing.T) {
 		httpcachetest.TestStore(t,
 			httpcachetest.TestStoreOpts{
@@ -81,7 +92,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 			Header:     http.Header{"Cache-Control": []string{"public, max-age=120"}},
 		}
 
-		if err := s.Set(t.Context(), freshReq, freshResp); err != nil {
+		if _, err := s.Set(t.Context(), freshReq, freshResp); err != nil {
 			t.Fatalf("failed to store fresh response: %s", err)
 		}
 
@@ -97,7 +108,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 			Header:     http.Header{"Cache-Control": []string{"public, max-age=60"}},
 		}
 
-		if err := s.Set(t.Context(), expiredReq, expiredResp); err != nil {
+		if _, err := s.Set(t.Context(), expiredReq, expiredResp); err != nil {
 			t.Fatalf("failed to store expired response: %s", err)
 		}
 
@@ -105,13 +116,13 @@ func TestMemoryStore_Clear(t *testing.T) {
 		synctest.Wait()
 
 		// Safety checks. Should not be necessary
-		if resp, err := s.Get(t.Context(), freshReq); err != nil {
+		if resp, _, err := s.Get(t.Context(), freshReq); err != nil {
 			t.Fatalf("failed to get fresh request: %s", err)
 		} else if resp == nil {
 			t.Error("Get() returned nil for fresh response before Clear(), expected non-nil response")
 		}
 
-		if resp, err := s.Get(t.Context(), expiredReq); err != nil {
+		if resp, _, err := s.Get(t.Context(), expiredReq); err != nil {
 			t.Fatalf("failed to get expired request: %s", err)
 		} else if resp == nil {
 			t.Error("Get() returned nil for expired response before Clear(), expected non-nil response")
@@ -119,13 +130,13 @@ func TestMemoryStore_Clear(t *testing.T) {
 
 		s.Clear()
 
-		if resp, err := s.Get(t.Context(), freshReq); resp != nil {
+		if resp, _, err := s.Get(t.Context(), freshReq); resp != nil {
 			t.Error("got fresh response after Clear()")
 		} else if err != nil {
 			t.Errorf("got error when getting fresh response after Clear(): %s", err)
 		}
 
-		if resp, err := s.Get(t.Context(), expiredReq); resp != nil {
+		if resp, _, err := s.Get(t.Context(), expiredReq); resp != nil {
 			t.Error("got expired response after Clear()")
 		} else if err != nil {
 			t.Errorf("got error when getting expired response after Clear(): %s", err)
@@ -151,7 +162,7 @@ func TestMemoryStore_Prune(t *testing.T) {
 			Header:     http.Header{"Cache-Control": []string{"public, max-age=120"}},
 		}
 
-		if err := s.Set(t.Context(), freshReq, freshResp); err != nil {
+		if _, err := s.Set(t.Context(), freshReq, freshResp); err != nil {
 			t.Fatalf("failed to store fresh response: %s", err)
 		}
 
@@ -167,7 +178,7 @@ func TestMemoryStore_Prune(t *testing.T) {
 			Header:     http.Header{"Cache-Control": []string{"public, max-age=60"}},
 		}
 
-		if err := s.Set(t.Context(), expiredReq, expiredResp); err != nil {
+		if _, err := s.Set(t.Context(), expiredReq, expiredResp); err != nil {
 			t.Fatalf("failed to store expired response: %s", err)
 		}
 
@@ -175,13 +186,13 @@ func TestMemoryStore_Prune(t *testing.T) {
 		synctest.Wait()
 
 		// Safety checks. Should not be necessary
-		if resp, err := s.Get(t.Context(), freshReq); err != nil {
+		if resp, _, err := s.Get(t.Context(), freshReq); err != nil {
 			t.Fatalf("failed to get fresh request: %s", err)
 		} else if resp == nil {
 			t.Error("Get() returned nil for fresh response before Prune(), expected non-nil response")
 		}
 
-		if resp, err := s.Get(t.Context(), expiredReq); err != nil {
+		if resp, _, err := s.Get(t.Context(), expiredReq); err != nil {
 			t.Fatalf("failed to get expired request: %s", err)
 		} else if resp == nil {
 			t.Error("Get() returned nil for expired response before Prune(), expected non-nil response")
@@ -189,13 +200,13 @@ func TestMemoryStore_Prune(t *testing.T) {
 
 		s.Prune()
 
-		if resp, err := s.Get(t.Context(), freshReq); err != nil {
+		if resp, _, err := s.Get(t.Context(), freshReq); err != nil {
 			t.Fatalf("failed to get fresh request after Prune(): %s", err)
 		} else if resp == nil {
 			t.Error("Get() returned nil for fresh response after Prune(), expected non-nil response")
 		}
 
-		if resp, err := s.Get(t.Context(), expiredReq); resp != nil {
+		if resp, _, err := s.Get(t.Context(), expiredReq); resp != nil {
 			t.Error("got expired response after Prune()")
 		} else if err != nil {
 			t.Errorf("got error when getting expired response after Prune(): %s", err)

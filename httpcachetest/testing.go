@@ -528,7 +528,7 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				storedResp := *tt.storedResp
 				storedResp.Time = time.Now()
 
-				if err := s.Set(t.Context(), storedReq, storedResp); err != nil {
+				if _, err := s.Set(t.Context(), storedReq, storedResp); err != nil {
 					if tt.wantStoreErr {
 						return
 					}
@@ -542,7 +542,7 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				time.Sleep(time.Minute)
 				synctest.Wait()
 
-				gotResp, gotErr := s.Get(t.Context(), *tt.lookupReq)
+				gotResp, _, gotErr := s.Get(t.Context(), *tt.lookupReq)
 
 				switch {
 				case tt.wantLookupErr && gotErr == nil:

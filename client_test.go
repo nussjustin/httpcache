@@ -74,7 +74,7 @@ func (t *memoryStore) key(req httpcache.RequestData) string {
 	return string(b2[:])
 }
 
-func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
+func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	key := t.key(req)
 
 	t.entriesMu.Lock()
@@ -82,13 +82,13 @@ func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 
 	respVal, ok := t.entries[key]
 	if !ok {
-		return nil, nil
+		return nil, "memory:miss", nil
 	}
 
-	return new(respVal), nil
+	return new(respVal), "memory:hit", nil
 }
 
-func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
+func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
 	key := t.key(req)
 
 	t.entriesMu.Lock()
@@ -100,7 +100,7 @@ func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 
 	t.entries[key] = resp
 
-	return nil
+	return "", nil
 }
 
 type testStore struct {
@@ -112,16 +112,16 @@ type testStore struct {
 
 var errStoreFail = errors.New("fail on store")
 
-func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
+func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	if t.failOnGet {
-		return nil, errStoreFail
+		return nil, "fail-on-get", errStoreFail
 	}
 	return t.Store.Get(ctx, req)
 }
 
-func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
+func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
 	if t.failOnStore {
-		return errStoreFail
+		return "fail-on-store", errStoreFail
 	}
 	t.stored++
 	return t.Store.Set(ctx, req, resp)
@@ -251,19 +251,28 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "fresh cached response",
 			txs: []transaction{
 				{
-					req:             newReq(),
-					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
-					wantReq:         newReq(),
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Transaction-Id", "0")),
 				},
 				{
-					req:             newReq(),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Hit: true, TTL: time.Minute},
-					wantReq:         newReq(),
+					req: newReq(),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "memory:hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
 					wantResp: newResp(
 						withRespHeader("Age", "60"),
 						withRespHeader("Cache-Control", "public, max-age=120"),
@@ -305,8 +314,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=60"),
 						withRespHeader("Etag", `"my tag"`)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30")),
 					wantResp: newResp(
@@ -321,6 +334,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
+						Detail:          "memory:hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -344,8 +358,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=60"),
 						withRespHeader("Etag", `W/"my tag"`)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30")),
 					wantResp: newResp(
@@ -360,6 +378,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
+						Detail:          "memory:hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -420,8 +439,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=60"),
 						withRespHeader("Last-Modified", `Mon, 02 Jan 2006 15:04:05 GMT`)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30")),
 					wantResp: newResp(
@@ -436,6 +459,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
+						Detail:          "memory:hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -497,8 +521,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						withRespHeader("Cache-Control", "public, max-age=60"),
 						withRespHeader("Etag", `"my etag"`),
 						withRespHeader("Last-Modified", `Mon, 02 Jan 2006 15:04:05 GMT`)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30")),
 					wantResp: newResp(
@@ -515,6 +543,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
+						Detail:          "memory:hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -664,25 +693,38 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "only if cached",
 			txs: []transaction{
 				{
-					req:             newReq(withReqHeader("Cache-Control", "only-if-cached")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss},
+					req: newReq(withReqHeader("Cache-Control", "only-if-cached")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Detail:    "memory:miss",
+						Forwarded: httpcache.ForwardedReasonMiss,
+					},
 					wantResp: newResp(
 						withRespStatus(http.StatusGatewayTimeout)),
 				},
 				{
-					req:             newReq(),
-					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
-					wantReq:         newReq(),
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Transaction-Id", "1")),
 				},
 				{
-					req:             newReq(withReqHeader("Cache-Control", "only-if-cached")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Hit: true, TTL: time.Minute},
-					wantReq:         newReq(),
+					req: newReq(withReqHeader("Cache-Control", "only-if-cached")),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "memory:hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
 					wantResp: newResp(
 						withRespHeader("Age", "60"),
 						withRespHeader("Cache-Control", "public, max-age=120"),
@@ -694,11 +736,15 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "no-store response",
 			txs: []transaction{
 				{
-					req:             newReq(),
-					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120, no-store")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss},
-					wantStored:      0,
-					wantReq:         newReq(),
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120, no-store")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Detail:    "memory:miss",
+						Forwarded: httpcache.ForwardedReasonMiss,
+					},
+					wantStored: 0,
+					wantReq:    newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120, no-store"),
 						withRespHeader("Transaction-Id", "0")),
@@ -714,9 +760,13 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Connection", "close"),
 						withRespHeader("Proxy-Authenticate", "Basis")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
-					wantReq:         newReq(),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Connection", "close"),
@@ -724,9 +774,14 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						withRespHeader("Transaction-Id", "0")),
 				},
 				{
-					req:             newReq(),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Hit: true, TTL: time.Minute},
-					wantReq:         newReq(),
+					req: newReq(),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "memory:hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
 					wantResp: newResp(
 						withRespHeader("Age", "60"),
 						withRespHeader("Cache-Control", "public, max-age=120"),
@@ -854,11 +909,15 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "error when storing",
 			txs: []transaction{
 				{
-					req:             newReq(),
-					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120")),
-					failOnStore:     true,
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss},
-					wantReq:         newReq(),
+					req:         newReq(),
+					resp:        newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					failOnStore: true,
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Detail:    "memory:miss",
+						Forwarded: httpcache.ForwardedReasonMiss,
+					},
+					wantReq: newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Transaction-Id", "0")),
@@ -894,19 +953,28 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			config: httpcache.Config{HeuristicFreshnessLifetime: 2 * time.Minute},
 			txs: []transaction{
 				{
-					req:             newReq(),
-					resp:            newResp(withRespHeader("Cache-Control", "public")),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
-					wantStored:      1,
-					wantReq:         newReq(),
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public"),
 						withRespHeader("Transaction-Id", "0")),
 				},
 				{
-					req:             newReq(),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Hit: true, TTL: time.Minute},
-					wantReq:         newReq(),
+					req: newReq(),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "memory:hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
 					wantResp: newResp(
 						withRespHeader("Age", "60"),
 						withRespHeader("Cache-Control", "public"),
