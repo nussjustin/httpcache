@@ -102,6 +102,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 		}
 
 		time.Sleep(time.Minute)
+		synctest.Wait()
 
 		// Safety checks. Should not be necessary
 		if resp, err := s.Get(t.Context(), freshReq); err != nil {
@@ -171,6 +172,7 @@ func TestMemoryStore_Prune(t *testing.T) {
 		}
 
 		time.Sleep(time.Minute)
+		synctest.Wait()
 
 		// Safety checks. Should not be necessary
 		if resp, err := s.Get(t.Context(), freshReq); err != nil {

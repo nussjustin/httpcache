@@ -540,6 +540,7 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				}
 
 				time.Sleep(time.Minute)
+				synctest.Wait()
 
 				gotResp, gotErr := s.Get(t.Context(), *tt.lookupReq)
 

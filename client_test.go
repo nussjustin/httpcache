@@ -978,6 +978,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					}
 
 					time.Sleep(time.Minute)
+					synctest.Wait()
 				}
 			})
 		})
@@ -1043,7 +1044,8 @@ func TestStoreResponse_Age(t *testing.T) {
 				resp := tt.resp(now)
 				resp.Time = now
 
-				synctest.Sleep(time.Minute)
+				time.Sleep(time.Minute)
+				synctest.Wait()
 
 				if got := resp.Age(); got != tt.want {
 					t.Errorf("StoreResponse.Age() = %s, want %s", got, tt.want)
