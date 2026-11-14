@@ -77,7 +77,7 @@ func CopyRequestBody(dst io.Writer, req *http.Request) (n int64, err error) {
 		return io.Copy(dst, rc)
 	}
 
-	return copyReadCloser(dst, &req.Body)
+	return copyReadCloser(dst, &req.Body, req.ContentLength)
 }
 
 // CopyResponseBody copies the body from resp to dst while making sure the response body can still be read afterward.
@@ -93,10 +93,10 @@ func CopyRequestBody(dst io.Writer, req *http.Request) (n int64, err error) {
 //
 // If the response body is nil, nothing will be copied.
 func CopyResponseBody(dst io.Writer, resp *http.Response) (n int64, err error) {
-	return copyReadCloser(dst, &resp.Body)
+	return copyReadCloser(dst, &resp.Body, resp.ContentLength)
 }
 
-func copyReadCloser(dst io.Writer, src *io.ReadCloser) (n int64, err error) {
+func copyReadCloser(dst io.Writer, src *io.ReadCloser, srcLen int64) (n int64, err error) {
 	r := io.Reader(*src)
 
 	if r == nil {
@@ -118,6 +118,13 @@ func copyReadCloser(dst io.Writer, src *io.ReadCloser) (n int64, err error) {
 	}
 
 	var buf BodyBuffer
+
+	// Pre-allocate space in buffer if we have an idea of the length.
+	if srcLen > 0 {
+		const maxPreAlloc = 4 << 20 // 4MiB
+
+		buf.Grow(int(min(srcLen, maxPreAlloc)))
+	}
 
 	n, err = io.Copy(io.MultiWriter(dst, &buf), r)
 	if err != nil {
