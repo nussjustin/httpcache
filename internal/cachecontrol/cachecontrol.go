@@ -26,7 +26,7 @@ type Directive struct {
 // Parse parses the given Cache-Control value and returns a sequence of directives.
 //
 // The parsing uses [Tokenize] to extract tokens from the given string and tries its best to form directives even from
-// non RFC9111 compliant inputs.
+// non RFC 9111 compliant inputs.
 //
 // Notably, a directive like `directive1=value "with" space,directive2` will _correctly_ parse the first directive with
 // the value `value "with" space`.
@@ -113,8 +113,8 @@ func Parse(s string) iter.Seq2[Directive, error] {
 	}
 }
 
-// ParseStructured is like [Parse], but parses the header as a structured field, as defined in RFC9651 and as
-// required when parsing a targeted HTTP cache control header as specified by RFC9213.
+// ParseStructured is like [Parse], but parses the header as a structured field, as defined in RFC 9651 and as
+// required when parsing a targeted HTTP cache control header as specified by RFC 9213.
 //
 // Unlike [Parse], this can yield non-nil errors.
 func ParseStructured(s string) iter.Seq2[Directive, error] {
