@@ -318,8 +318,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-None-Match", `"my tag"`)),
-					resp:            newResp(withRespStatus(http.StatusNotModified)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonStale},
+					resp: newResp(withRespStatus(http.StatusNotModified)),
+					wantCacheStatus: httpcache.Status{
+						Cache:           "my-cache",
+						Forwarded:       httpcache.ForwardedReasonStale,
+						ForwardedStatus: http.StatusNotModified,
+					},
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-None-Match", `"my tag"`)),
@@ -353,8 +357,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-None-Match", `"my tag"`)),
-					resp:            newResp(withRespStatus(http.StatusNotModified)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonStale},
+					resp: newResp(withRespStatus(http.StatusNotModified)),
+					wantCacheStatus: httpcache.Status{
+						Cache:           "my-cache",
+						Forwarded:       httpcache.ForwardedReasonStale,
+						ForwardedStatus: http.StatusNotModified,
+					},
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-None-Match", `"my tag"`)),
@@ -425,8 +433,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-Modified-Since", `Mon, 02 Jan 2006 15:04:05 GMT`)),
-					resp:            newResp(withRespStatus(http.StatusNotModified)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonStale},
+					resp: newResp(withRespStatus(http.StatusNotModified)),
+					wantCacheStatus: httpcache.Status{
+						Cache:           "my-cache",
+						Forwarded:       httpcache.ForwardedReasonStale,
+						ForwardedStatus: http.StatusNotModified,
+					},
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-Modified-Since", `Mon, 02 Jan 2006 15:04:05 GMT`)),
@@ -500,8 +512,12 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-Modified-Since", `Mon, 02 Jan 2006 15:04:05 GMT`),
 						withReqHeader("If-None-Match", `"my etag"`)),
-					resp:            newResp(withRespStatus(http.StatusNotModified)),
-					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonStale},
+					resp: newResp(withRespStatus(http.StatusNotModified)),
+					wantCacheStatus: httpcache.Status{
+						Cache:           "my-cache",
+						Forwarded:       httpcache.ForwardedReasonStale,
+						ForwardedStatus: http.StatusNotModified,
+					},
 					wantReq: newReq(
 						withReqHeader("Cache-Control", "max-stale=30"),
 						withReqHeader("If-Modified-Since", `Mon, 02 Jan 2006 15:04:05 GMT`),

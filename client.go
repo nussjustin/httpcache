@@ -192,6 +192,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	}
 
 	if stored != nil && resp.StatusCode == http.StatusNotModified {
+		status.ForwardedStatus = resp.StatusCode
 		return stored.restore(req), status, nil
 	}
 
@@ -207,8 +208,8 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 		c.Config.RemoveUnstorableHeaders(respData.Header)
 
-		if err := c.Store.Set(req.Context(), reqData, respData); err == nil {
-			status.Stored = true
+		if detail, err := c.Store.Set(req.Context(), reqData, respData); err == nil {
+			status.Detail, status.Stored = detail, true
 		}
 	}
 
@@ -234,10 +235,14 @@ type Store interface {
 	// Get returns the stored response matching the given request.
 	//
 	// The client will not modify the returned response, so multiple calls may return the same reference.
-	Get(ctx context.Context, req RequestData) (resp *ResponseData, err error)
+	//
+	// The returned default parameter, if not empty, is added to the Cache-Status header.
+	Get(ctx context.Context, req RequestData) (resp *ResponseData, detail string, err error)
 
 	// Set stores the given response in the cache.
-	Set(ctx context.Context, req RequestData, resp ResponseData) error
+	//
+	// The returned default parameter, if not empty, is added to the Cache-Status header.
+	Set(ctx context.Context, req RequestData, resp ResponseData) (detail string, err error)
 }
 
 // RequestData contains HTTP request data that must be stored and used for lookups by a [Store].
@@ -305,6 +310,8 @@ type ResponseData struct {
 	Trailer http.Header
 
 	// ParsedDirectives contains the parsed Cache-Control directives, potentially from a targeted Cache-Control header.
+	//
+	// This may not be set on responses returned by [Store.Get].
 	ParsedDirectives ResponseDirectives
 }
 
