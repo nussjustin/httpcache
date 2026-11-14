@@ -1636,7 +1636,7 @@ func BenchmarkParseRequestDirectives(b *testing.B) {
 	}
 }
 
-func TestParseTargetedRequestDirectives(t *testing.T) {
+func TestParseStructuredRequestDirectives(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      string
@@ -1825,18 +1825,18 @@ func TestParseTargetedRequestDirectives(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ParseTargetedRequestDirectives(tt.in)
+			got, err := httpcache.ParseStructuredRequestDirectives(tt.in)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ParseTargetedRequestDirectives() mismatch (-want +got):\n%s", diff)
+				t.Errorf("ParseStructuredRequestDirectives() mismatch (-want +got):\n%s", diff)
 			}
 			if len(tt.wantErr) == 0 && err != nil {
-				t.Errorf("ParseTargetedRequestDirectives() error = %v, want nil", err)
+				t.Errorf("ParseStructuredRequestDirectives() error = %v, want nil", err)
 			}
 			if len(tt.wantErr) > 0 {
 				gotErrs := errorStrings(err)
 
 				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
-					t.Errorf("ParseTargetedRequestDirectives() error mismatch (-want +got):\n%s", diff)
+					t.Errorf("ParseStructuredRequestDirectives() error mismatch (-want +got):\n%s", diff)
 				}
 			}
 		})
@@ -2146,7 +2146,7 @@ func BenchmarkParseResponseDirectives(b *testing.B) {
 	}
 }
 
-func TestParseTargetedResponseDirectives(t *testing.T) {
+func TestParseStructuredResponseDirectives(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      string
@@ -2331,18 +2331,18 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := httpcache.ParseTargetedResponseDirectives(tt.in)
+			got, err := httpcache.ParseStructuredResponseDirectives(tt.in)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ParseTargetedResponseDirectives() mismatch (-want +got):\n%s", diff)
+				t.Errorf("ParseStructuredResponseDirectives() mismatch (-want +got):\n%s", diff)
 			}
 			if len(tt.wantErr) == 0 && err != nil {
-				t.Errorf("ParseTargetedResponseDirectives() error = %v, want nil", err)
+				t.Errorf("ParseStructuredResponseDirectives() error = %v, want nil", err)
 			}
 			if len(tt.wantErr) > 0 {
 				gotErrs := errorStrings(err)
 
 				if diff := cmp.Diff(tt.wantErr, gotErrs); diff != "" {
-					t.Errorf("ParseTargetedResponseDirectives() error mismatch (-want +got):\n%s", diff)
+					t.Errorf("ParseStructuredResponseDirectives() error mismatch (-want +got):\n%s", diff)
 				}
 			}
 		})

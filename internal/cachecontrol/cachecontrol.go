@@ -113,11 +113,11 @@ func Parse(s string) iter.Seq2[Directive, error] {
 	}
 }
 
-// ParseTargeted is like [Parse], but parses the header as a structured field, as defined in RFC9651 and as
+// ParseStructured is like [Parse], but parses the header as a structured field, as defined in RFC9651 and as
 // required when parsing a targeted HTTP cache control header as specified by RFC9213.
 //
 // Unlike [Parse], this can yield non-nil errors.
-func ParseTargeted(s string) iter.Seq2[Directive, error] {
+func ParseStructured(s string) iter.Seq2[Directive, error] {
 	return func(yield func(Directive, error) bool) {
 		d, err := httpsfv.Parse[httpsfv.Dictionary](s)
 		if err != nil {

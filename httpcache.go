@@ -203,7 +203,7 @@ func (c Config) ParseResponseDirectives(h http.Header) (ResponseDirectives, erro
 			continue
 		}
 
-		d, err := ParseTargetedResponseDirectives(strings.Join(s, ","))
+		d, err := ParseStructuredResponseDirectives(strings.Join(s, ","))
 		if err != nil {
 			continue
 		}
@@ -707,22 +707,23 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 	return parseRequestDirectives(header, false)
 }
 
-// ParseTargetedRequestDirectives is like [ParseRequestDirectives], but parses a targeted Cache-Control header as
-// specified in RFC 9213, treating the header as a structured field dictionary.
+// ParseStructuredRequestDirectives is like [ParseRequestDirectives], but parses a targeted Cache-Control header as
+// a structured field dictionary, as required by RFC 9213.
 //
-// Note that RFC 9213 only specifies the Cache-Control header for the response, not for the request.
-func ParseTargetedRequestDirectives(header string) (RequestDirectives, error) {
+// Note that RFC 9213 only specifies the Cache-Control header for the response, not for the request. We still provide
+// this function for consistency.
+func ParseStructuredRequestDirectives(header string) (RequestDirectives, error) {
 	return parseRequestDirectives(header, true)
 }
 
-func parseRequestDirectives(header string, targeted bool) (RequestDirectives, error) {
+func parseRequestDirectives(header string, structured bool) (RequestDirectives, error) {
 	if header == "" {
 		return RequestDirectives{}, nil
 	}
 
 	var seq iter.Seq2[cachecontrol.Directive, error]
-	if targeted {
-		seq = cachecontrol.ParseTargeted(header)
+	if structured {
+		seq = cachecontrol.ParseStructured(header)
 	} else {
 		seq = cachecontrol.Parse(header)
 	}
@@ -925,20 +926,20 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 	return parseResponseDirectives(header, false)
 }
 
-// ParseTargetedResponseDirectives is like [ParseResponseDirectives], but parses a targeted Cache-Control header as
-// specified in RFC 9213, treating the header as a structured field dictionary.
-func ParseTargetedResponseDirectives(header string) (ResponseDirectives, error) {
+// ParseStructuredResponseDirectives is like [ParseResponseDirectives], but parses a targeted Cache-Control header as
+// a structured field dictionary, as required by RFC 9213.
+func ParseStructuredResponseDirectives(header string) (ResponseDirectives, error) {
 	return parseResponseDirectives(header, true)
 }
 
-func parseResponseDirectives(header string, targeted bool) (ResponseDirectives, error) {
+func parseResponseDirectives(header string, structured bool) (ResponseDirectives, error) {
 	if header == "" {
 		return ResponseDirectives{}, nil
 	}
 
 	var seq iter.Seq2[cachecontrol.Directive, error]
-	if targeted {
-		seq = cachecontrol.ParseTargeted(header)
+	if structured {
+		seq = cachecontrol.ParseStructured(header)
 	} else {
 		seq = cachecontrol.Parse(header)
 	}

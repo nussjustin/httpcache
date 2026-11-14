@@ -236,7 +236,7 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-func TestParseTargeted(t *testing.T) {
+func TestParseStructured(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      string
@@ -405,10 +405,10 @@ func TestParseTargeted(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []cachecontrol.Directive
 
-			for d, err := range cachecontrol.ParseTargeted(tt.in) {
+			for d, err := range cachecontrol.ParseStructured(tt.in) {
 				if err != nil {
 					if !errors.Is(err, tt.wantErr) && (err == nil || tt.wantErr == nil || err.Error() != tt.wantErr.Error()) {
-						t.Errorf("ParseTargeted() error = %v, want %v", err, tt.wantErr)
+						t.Errorf("ParseStructured() error = %v, want %v", err, tt.wantErr)
 					}
 					return
 				}
@@ -417,7 +417,7 @@ func TestParseTargeted(t *testing.T) {
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ParseTargeted() mismatch (-want +git):\n%s", diff)
+				t.Errorf("ParseStructured() mismatch (-want +git):\n%s", diff)
 			}
 		})
 	}
