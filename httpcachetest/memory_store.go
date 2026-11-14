@@ -1,8 +1,10 @@
 package httpcachetest
 
 import (
-	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
+	"hash/maphash"
 	"io"
 	"maps"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nussjustin/httpcache"
+	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
 // MemoryStore implements a [github.com/nussjustin/httpcache.Store] that stores all responses in memory.
@@ -121,31 +124,30 @@ func (e *memoryStoreEntry) freshness(
 }
 
 func (e *memoryStoreEntry) restore() *http.Response {
-	header := e.resp.Header.Clone()
-	header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
-
-	return &http.Response{
-		Status:        e.resp.Status,
-		StatusCode:    e.resp.StatusCode,
-		Proto:         e.resp.Proto,
-		ProtoMajor:    e.resp.ProtoMajor,
-		ProtoMinor:    e.resp.ProtoMinor,
-		Header:        header,
-		Body:          io.NopCloser(bytes.NewReader(e.respBody)),
-		ContentLength: int64(len(e.respBody)),
-		Trailer:       e.resp.Trailer.Clone(),
-	}
+	// Can only fail if the body can not be read, which can not happen as the body is in-memory
+	resp, _ := httpcacheutil.CloneResponse(&e.resp)
+	resp.Header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
+	return resp
 }
 
-func (m *MemoryStore) key(req *http.Request) string {
-	method := req.Method
-	if req.Method == "HEAD" {
-		method = "GET"
+var seed = maphash.MakeSeed()
+
+func (m *MemoryStore) key(req *http.Request) (string, error) {
+	var h maphash.Hash
+
+	h.SetSeed(seed)
+
+	if _, err := httpcacheutil.HashRequest(&h, req, true); err != nil {
+		return "", err
 	}
-	// The query is handled by the URLVariationCOnfig
-	urlWithoutQuery := *req.URL
-	urlWithoutQuery.RawQuery = ""
-	return method + " " + urlWithoutQuery.String()
+
+	var b1 [8]byte
+	binary.BigEndian.PutUint64(b1[:], h.Sum64())
+
+	var b2 [8 * 2]byte
+	hex.Encode(b2[:], b1[:])
+
+	return string(b2[:]), nil
 }
 
 // Clear clears the store, removing all stored responses.
@@ -158,7 +160,10 @@ func (m *MemoryStore) Clear() {
 
 // Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
 func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
-	key := m.key(req)
+	key, err := m.key(req)
+	if err != nil {
+		return nil, err
+	}
 
 	m.entriesMu.RLock()
 	defer m.entriesMu.RUnlock()
@@ -227,7 +232,10 @@ func (m *MemoryStore) Set(
 		return err
 	}
 
-	key := m.key(req)
+	key, err := m.key(req)
+	if err != nil {
+		return err
+	}
 
 	var respBody []byte
 

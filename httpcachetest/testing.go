@@ -38,6 +38,12 @@ func (r errReader) Read([]byte) (n int, err error) {
 
 type reqOpt func(*http.Request)
 
+func withReqBody(r io.Reader) reqOpt {
+	return func(req *http.Request) {
+		req.Body = io.NopCloser(r)
+	}
+}
+
 func withReqHeader(name, value string) reqOpt {
 	return func(req *http.Request) {
 		req.Header.Add(name, value)
@@ -146,12 +152,13 @@ type TestStoreOpts struct {
 // Each test case calls f once, which must return an empty store.
 func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 	type testCase struct {
-		name         string
-		storedReq    *http.Request
-		storedResp   *http.Response
-		lookupReq    *http.Request
-		expectedResp *http.Response
-		wantStoreErr bool
+		name          string
+		storedReq     *http.Request
+		storedResp    *http.Response
+		lookupReq     *http.Request
+		expectedResp  *http.Response
+		wantStoreErr  bool
+		wantLookupErr bool
 	}
 
 	tests := []testCase{
@@ -181,6 +188,35 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 			storedResp: newResp(
 				withRespHeader("Cache-Control", "public, max-age=120")),
 			lookupReq: newReq(withReqMethod("POST")),
+		},
+		{
+			name: "found with body",
+			storedReq: newReq(
+				withReqMethod("QUERY"),
+				withReqHeader("Content-Type", "application/json"),
+				withReqBody(strings.NewReader(`{"query": "test"}`))),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=120")),
+			lookupReq: newReq(
+				withReqMethod("QUERY"),
+				withReqHeader("Content-Type", "application/json"),
+				withReqBody(strings.NewReader(`{"query": "test"}`))),
+			expectedResp: newResp(
+				withRespHeader("Age", "60"),
+				withRespHeader("Cache-Control", "public, max-age=120")),
+		},
+		{
+			name: "not found with body mismatch",
+			storedReq: newReq(
+				withReqMethod("QUERY"),
+				withReqHeader("Content-Type", "application/json"),
+				withReqBody(strings.NewReader(`{"query": "test"}`))),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=120")),
+			lookupReq: newReq(
+				withReqMethod("QUERY"),
+				withReqHeader("Content-Type", "application/json"),
+				withReqBody(strings.NewReader(`{"query": "test1"}`))),
 		},
 		{
 			name:      "not found for URL with different scheme",
@@ -426,7 +462,29 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 		},
 
 		{
-			name:      "error returned for response whose body can not be read",
+			name: "error returned for request whose body can not be read when storing",
+			storedReq: newReq(
+				withReqMethod("QUERY"),
+				withReqBody(errReader{})),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=120")),
+			wantStoreErr: true,
+		},
+		{
+			name: "error returned for request whose body can not be read when looking up",
+			storedReq: newReq(
+				withReqMethod("QUERY"),
+				withReqBody(strings.NewReader("{}"))),
+			storedResp: newResp(
+				withRespHeader("Cache-Control", "public, max-age=120")),
+			lookupReq: newReq(
+				withReqMethod("QUERY"),
+				withReqBody(errReader{})),
+			wantLookupErr: true,
+		},
+
+		{
+			name:      "error returned for response when body can not be read",
 			storedReq: newReq(),
 			storedResp: newResp(
 				withRespBody(errReader{}),
@@ -535,7 +593,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 					_ = gotResp.Body.Close()
 				}
 
-				if gotErr != nil {
+				switch {
+				case tt.wantLookupErr && gotErr == nil:
+					t.Fatal("Get() error = nil, want error")
+				case !tt.wantLookupErr && gotErr != nil:
 					t.Fatalf("Get() error = %v, want nil", gotErr)
 				}
 
