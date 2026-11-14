@@ -319,17 +319,26 @@ type ResponseData struct {
 
 // Age returns the responses age based on the Date header, if present, or the Time field otherwise.
 func (s *ResponseData) Age() time.Duration {
+	if date, ok := s.Date(); ok {
+		return time.Since(date)
+	}
+
+	return time.Since(s.Time)
+}
+
+// Date returns the parsed Date header.
+func (s *ResponseData) Date() (date time.Time, ok bool) {
 	dates := s.Header.Values("Date")
 	if len(dates) != 1 {
-		return time.Since(s.Time)
+		return time.Time{}, false
 	}
 
 	date, err := http.ParseTime(dates[0])
 	if err != nil {
-		return time.Since(s.Time)
+		return time.Time{}, false
 	}
 
-	return time.Since(date)
+	return date, true
 }
 
 func (s *ResponseData) restore(req *http.Request) *http.Response {

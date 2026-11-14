@@ -78,7 +78,7 @@ func (e *memoryStoreEntry) age() time.Duration {
 	now := time.Now()
 
 	var age httpcache.Opt[time.Duration]
-	if date, err := http.ParseTime(e.resp.Header.Get("Date")); err == nil {
+	if date, ok := e.resp.Date(); ok {
 		age.Value, age.Valid = now.Sub(date), true
 	}
 

@@ -1069,7 +1069,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 	}
 }
 
-func TestStoreResponse_Age(t *testing.T) {
+func TestResponseData_Age(t *testing.T) {
 	tests := []struct {
 		name string
 		resp func(time.Time) httpcache.ResponseData
@@ -1132,9 +1132,66 @@ func TestStoreResponse_Age(t *testing.T) {
 				synctest.Wait()
 
 				if got := resp.Age(); got != tt.want {
-					t.Errorf("StoreResponse.Age() = %s, want %s", got, tt.want)
+					t.Errorf("ResponseData.Age() = %s, want %s", got, tt.want)
 				}
 			})
+		})
+	}
+}
+
+func TestResponseData_Date(t *testing.T) {
+	awesomeDate := time.Date(2006, time.January, 2, 15, 4, 5, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		resp   httpcache.ResponseData
+		want   time.Time
+		wantOk bool
+	}{
+		{
+			name: "no Date header",
+			resp: httpcache.ResponseData{},
+		},
+		{
+			name: "single Date header",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{awesomeDate.Format(http.TimeFormat)},
+				},
+			},
+			want:   awesomeDate,
+			wantOk: true,
+		},
+		{
+			name: "invalid Date header",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{"invalid"},
+				},
+			},
+		},
+		{
+			name: "multiple Date headers",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{
+						awesomeDate.Format(http.TimeFormat),
+						awesomeDate.Add(time.Hour).Format(http.TimeFormat),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotOk := tt.resp.Date()
+			if got != tt.want {
+				t.Errorf("ResponseData.Date() = %s, want %s", got, tt.want)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("ResponseData.Date() ok = %v, want %v", gotOk, tt.wantOk)
+			}
 		})
 	}
 }
