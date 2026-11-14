@@ -1,12 +1,15 @@
 package httpcache
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
 // Client wraps an existing [*net/http.Client] (or [http.DefaultClient]) adding caching of responses using a
@@ -93,10 +96,15 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		return resp, status, err
 	}
 
-	stored, err := c.Store.Get(req.Context(), req)
+	storeReq, err := requestDataFromRequest(req, reqDirectives)
+	if err != nil {
+		return nil, Status{}, err
+	}
+
+	stored, err := c.Store.Get(req.Context(), storeReq)
 
 	if stored != nil && err == nil {
-		age, _ := ParseAge(stored.Header.Get("Age"))
+		age := stored.Age()
 
 		date, _ := http.ParseTime(stored.Header.Get("Date"))
 
@@ -137,7 +145,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 			stored = nil
 		case FreshnessFresh:
 			status.Hit = true
-			return stored, status, nil
+			return stored.restore(req), status, nil
 		case FreshnessStale:
 			status.Forwarded = ForwardedReasonStale
 
@@ -180,29 +188,27 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		return resp, status, nil
 	}
 
-	reqTime := time.Now()
-
 	//goland:noinspection GoResourceLeak
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, Status{}, err
 	}
 
-	respTime := time.Now()
-
 	if stored != nil && resp.StatusCode == http.StatusNotModified {
-		return stored, status, nil
+		return stored.restore(req), status, nil
 	}
 
+	respDirectives, _ := c.Config.ParseResponseDirectives(resp.Header)
+
 	if c.Config.AllowsStoringResponse(resp) {
-		respCopy, err := httpcacheutil.CloneResponse(resp)
+		storeResp, err := responseDataFromResponse(resp, respDirectives)
 		if err != nil {
 			return nil, Status{}, err
 		}
 
-		c.Config.RemoveUnstorableHeaders(respCopy.Header)
+		c.Config.RemoveUnstorableHeaders(storeResp.Header)
 
-		if err := c.Store.Set(req.Context(), req, reqTime, respCopy, respTime); err == nil {
+		if err := c.Store.Set(req.Context(), storeReq, storeResp); err == nil {
 			status.Stored = true
 		}
 	}
@@ -228,20 +234,165 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 type Store interface {
 	// Get returns the stored response matching the given request.
 	//
-	// The given request must not be modified.
-	//
-	// The response must include an Age header containing the age of the response.
-	Get(ctx context.Context, req *http.Request) (resp *http.Response, err error)
+	// The client will not modify the returned response, so multiple calls may return the same reference.
+	Get(ctx context.Context, req RequestData) (resp *ResponseData, err error)
 
 	// Set stores the given response in the cache.
+	Set(ctx context.Context, req RequestData, resp ResponseData) error
+}
+
+// RequestData contains HTTP request data that must be stored and used for lookups by a [Store].
+type RequestData struct {
+	// Time is the time at which the request was sent.
+	Time time.Time
+
+	// Method contains the request method.
+	Method string
+
+	// URL contains the URL the request was sent to.
+	URL url.URL
+
+	// Header contains the headers sent in the request.
 	//
-	// The given request must not be modified or retained.
+	// Certain headers may have been removed, e.g. authorization related headers.
+	Header http.Header
+
+	// Body contains the raw request body bytes or nil if the request did not sent a body.
+	Body []byte
+
+	// ParsedDirectives contains the parsed Cache-Control directives.
 	//
-	// The response is a copy of the original, without the Request field set, and the body is guaranteed to be
-	// readable without errors.
-	Set(
-		ctx context.Context,
-		req *http.Request, reqTime time.Time,
-		resp *http.Response, respTime time.Time,
-	) error
+	// This can also be obtained by parsing the Cache-Control header from the Header fields and is only set so that
+	// stores can avoid parsing the header again.
+	ParsedDirectives RequestDirectives
+}
+
+func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (RequestData, error) {
+	var body []byte
+
+	if req.Body != nil {
+		defer func() {
+			_ = req.Body.Close()
+
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+		}()
+
+		if req.ContentLength > 0 {
+			body = make([]byte, 0, int(req.ContentLength))
+		}
+
+		var err error
+
+		if body, err = io.ReadAll(req.Body); err != nil {
+			return RequestData{}, err
+		}
+	}
+
+	return RequestData{
+		Time:             time.Now(),
+		Method:           cmp.Or(req.Method, "GET"),
+		URL:              *req.URL,
+		Header:           req.Header.Clone(),
+		Body:             body,
+		ParsedDirectives: reqDirectives,
+	}, nil
+}
+
+// ResponseData contains HTTP response data that must be stored and returned by a [Store].
+type ResponseData struct {
+	// Time is the time at which the response was received by the client.
+	Time time.Time
+
+	// Status contains the status line returned for the response.
+	Status string
+
+	// StatusCode contains the status code returned for the response.
+	StatusCode int
+
+	// Header contains the headers returned for the response.
+	//
+	// Certain headers may have been removed, e.g. authorization related headers.
+	Header http.Header
+
+	// Body contains the raw response body bytes.
+	Body []byte
+
+	// Trailer contains the trailers returned for the response.
+	Trailer http.Header
+
+	// ParsedDirectives contains the parsed Cache-Control directives, potentially from a targeted Cache-Control header.
+	ParsedDirectives ResponseDirectives
+}
+
+// Age returns the responses age based on the Date header, if present, or the Time field otherwise.
+func (s *ResponseData) Age() time.Duration {
+	dates := s.Header.Values("Date")
+	if len(dates) != 1 {
+		return time.Since(s.Time)
+	}
+
+	date, err := http.ParseTime(dates[0])
+	if err != nil {
+		return time.Since(s.Time)
+	}
+
+	return time.Since(date)
+}
+
+func (s *ResponseData) restore(req *http.Request) *http.Response {
+	header := s.Header.Clone()
+	header.Set("Age", strconv.Itoa(int(s.Age().Seconds())))
+
+	var body io.ReadCloser
+
+	if s.Body != nil {
+		body = io.NopCloser(bytes.NewReader(s.Body))
+	}
+
+	return &http.Response{
+		Status:        s.Status,
+		StatusCode:    s.StatusCode,
+		Proto:         req.Proto,
+		ProtoMajor:    req.ProtoMajor,
+		ProtoMinor:    req.ProtoMinor,
+		Header:        header,
+		Body:          body,
+		ContentLength: int64(len(s.Body)),
+		Trailer:       s.Trailer.Clone(),
+		Request:       req,
+	}
+}
+
+func responseDataFromResponse(resp *http.Response, respDirectives ResponseDirectives) (ResponseData, error) {
+	var body []byte
+
+	if resp.Body != nil {
+		defer func() {
+			_ = resp.Body.Close()
+
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.ContentLength = int64(len(body))
+		}()
+
+		if resp.ContentLength > 0 {
+			body = make([]byte, 0, int(resp.ContentLength))
+		}
+
+		var err error
+
+		if body, err = io.ReadAll(resp.Body); err != nil {
+			return ResponseData{}, err
+		}
+	}
+
+	return ResponseData{
+		Time:             time.Now(),
+		Status:           resp.Status,
+		StatusCode:       resp.StatusCode,
+		Header:           resp.Header.Clone(),
+		Body:             body,
+		Trailer:          resp.Trailer.Clone(),
+		ParsedDirectives: respDirectives,
+	}, nil
 }

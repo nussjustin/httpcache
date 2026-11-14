@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"hash/maphash"
-	"io"
 	"maps"
 	"net/http"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -57,17 +56,16 @@ type MemoryStoreOpts struct {
 	ValidateNoVarySearch bool
 }
 
+var _ httpcache.Store = (*MemoryStore)(nil)
+
 // NewMemoryStore returns a new [MemoryStore] using the given options.
 func NewMemoryStore(opts MemoryStoreOpts) *MemoryStore {
 	return &MemoryStore{opts: opts}
 }
 
 type memoryStoreEntry struct {
-	req                http.Request
-	reqTime            time.Time
-	resp               http.Response
-	respBody           []byte
-	respTime           time.Time
+	req                httpcache.RequestData
+	resp               httpcache.ResponseData
 	urlVariationConfig httpcache.URLVariationConfig
 	vary               httpcache.Vary
 }
@@ -82,10 +80,10 @@ func (e *memoryStoreEntry) age() time.Duration {
 
 	return httpcache.CalculateAge(
 		now,
-		e.reqTime,
+		e.req.Time,
 		age,
-		e.respTime,
-		e.respTime)
+		e.resp.Time,
+		e.resp.Time)
 }
 
 func (e *memoryStoreEntry) freshness(
@@ -123,22 +121,14 @@ func (e *memoryStoreEntry) freshness(
 		maxStale)
 }
 
-func (e *memoryStoreEntry) restore() *http.Response {
-	// Can only fail if the body can not be read, which can not happen as the body is in-memory
-	resp, _ := httpcacheutil.CloneResponse(&e.resp)
-	resp.Header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
-	return resp
-}
-
 var seed = maphash.MakeSeed()
 
-func (m *MemoryStore) key(req *http.Request) (string, error) {
+func (m *MemoryStore) key(req httpcache.RequestData) string {
 	var h maphash.Hash
-
 	h.SetSeed(seed)
 
-	if _, err := httpcacheutil.HashRequest(&h, req, true); err != nil {
-		return "", err
+	if _, err := httpcacheutil.HashRequest(&h, req.Method, req.URL, req.Body); err != nil {
+		panic(fmt.Errorf("HashRequest returned an error: %w", err))
 	}
 
 	var b1 [8]byte
@@ -147,7 +137,7 @@ func (m *MemoryStore) key(req *http.Request) (string, error) {
 	var b2 [8 * 2]byte
 	hex.Encode(b2[:], b1[:])
 
-	return string(b2[:]), nil
+	return string(b2[:])
 }
 
 // Clear clears the store, removing all stored responses.
@@ -159,11 +149,8 @@ func (m *MemoryStore) Clear() {
 }
 
 // Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
-func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
-	key, err := m.key(req)
-	if err != nil {
-		return nil, err
-	}
+func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
+	key := m.key(req)
 
 	m.entriesMu.RLock()
 	defer m.entriesMu.RUnlock()
@@ -171,7 +158,7 @@ func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 	entries := m.entries[key]
 
 	for _, entry := range entries {
-		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
+		if !entry.urlVariationConfig.Equals(&entry.req.URL, &req.URL) {
 			continue
 		}
 
@@ -191,7 +178,7 @@ func (m *MemoryStore) Get(_ context.Context, req *http.Request) (resp *http.Resp
 			}
 		}
 
-		return entry.restore(), nil
+		return &entry.resp, nil
 	}
 
 	return nil, nil
@@ -216,11 +203,7 @@ func (m *MemoryStore) Prune() {
 }
 
 // Set implements the [github.com/nussjustin/httpcache.Store.Set] method.
-func (m *MemoryStore) Set(
-	_ context.Context,
-	req *http.Request, reqTime time.Time,
-	resp *http.Response, respTime time.Time,
-) error {
+func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
 	vary := httpcache.ParseVary(resp.Header["Vary"])
 
 	if vary.Wildcard() {
@@ -232,34 +215,13 @@ func (m *MemoryStore) Set(
 		return err
 	}
 
-	key, err := m.key(req)
-	if err != nil {
-		return err
-	}
-
-	var respBody []byte
-
-	if resp.Body != nil {
-		var err error
-		if respBody, err = io.ReadAll(resp.Body); err != nil {
-			return err
-		}
-	}
+	key := m.key(req)
 
 	entry := &memoryStoreEntry{
-		req:                *req,
-		reqTime:            reqTime,
-		resp:               *resp,
-		respBody:           respBody,
-		respTime:           respTime,
+		req:                req,
+		resp:               resp,
 		urlVariationConfig: urlVariationConfig,
 		vary:               vary,
-	}
-
-	// Note: Use URL.Clone once Go 1.27 is required.
-	entry.req.URL = new(*req.URL)
-	if entry.req.URL.User != nil {
-		entry.req.URL.User = new(*entry.req.URL.User)
 	}
 
 	m.entriesMu.Lock()

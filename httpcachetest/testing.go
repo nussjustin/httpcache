@@ -2,13 +2,10 @@ package httpcachetest
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -30,44 +27,38 @@ func headerEqual(a, b http.Header) bool {
 	return true
 }
 
-type errReader struct{}
+type reqOpt func(*httpcache.RequestData)
 
-func (r errReader) Read([]byte) (n int, err error) {
-	return 0, errors.New("read error")
-}
-
-type reqOpt func(*http.Request)
-
-func withReqBody(r io.Reader) reqOpt {
-	return func(req *http.Request) {
-		req.Body = io.NopCloser(r)
+func withReqBody(b string) reqOpt {
+	return func(req *httpcache.RequestData) {
+		req.Body = []byte(b)
 	}
 }
 
 func withReqHeader(name, value string) reqOpt {
-	return func(req *http.Request) {
+	return func(req *httpcache.RequestData) {
 		req.Header.Add(name, value)
 	}
 }
 
 func withReqMethod(method string) reqOpt {
-	return func(req *http.Request) {
+	return func(req *httpcache.RequestData) {
 		req.Method = method
 	}
 }
 
 func withReqUrl(urlStr string) reqOpt {
-	return func(req *http.Request) {
+	return func(req *httpcache.RequestData) {
 		parsedURL, err := url.Parse(urlStr)
 		if err != nil {
 			panic(err)
 		}
-		req.URL = parsedURL
+		req.URL = *parsedURL
 	}
 }
 
-func newReq(opts ...reqOpt) *http.Request {
-	req := &http.Request{Header: make(http.Header)}
+func newReq(opts ...reqOpt) *httpcache.RequestData {
+	req := &httpcache.RequestData{Header: make(http.Header)}
 
 	opts = append(
 		[]reqOpt{
@@ -84,30 +75,30 @@ func newReq(opts ...reqOpt) *http.Request {
 	return req
 }
 
-type respOpt func(*http.Response)
+type respOpt func(*httpcache.ResponseData)
 
-func withRespBody(r io.Reader) respOpt {
-	return func(resp *http.Response) {
-		resp.Body = io.NopCloser(r)
+func withRespBody(b string) respOpt {
+	return func(resp *httpcache.ResponseData) {
+		resp.Body = []byte(b)
 	}
 }
 
 func withRespHeader(name, value string) respOpt {
-	return func(resp *http.Response) {
+	return func(resp *httpcache.ResponseData) {
 		resp.Header.Add(name, value)
 	}
 }
 
 func withRespStatus(code int) respOpt {
-	return func(resp *http.Response) {
+	return func(resp *httpcache.ResponseData) {
 		resp.Status = http.StatusText(code)
 		resp.StatusCode = code
 	}
 }
 
 // bodyclose:handled
-func newResp(opts ...respOpt) *http.Response {
-	resp := &http.Response{Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}
+func newResp(opts ...respOpt) *httpcache.ResponseData {
+	resp := &httpcache.ResponseData{Header: make(http.Header), Body: []byte{}}
 
 	opts = append(
 		[]respOpt{
@@ -153,10 +144,10 @@ type TestStoreOpts struct {
 func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 	type testCase struct {
 		name          string
-		storedReq     *http.Request
-		storedResp    *http.Response
-		lookupReq     *http.Request
-		expectedResp  *http.Response
+		storedReq     *httpcache.RequestData
+		storedResp    *httpcache.ResponseData
+		lookupReq     *httpcache.RequestData
+		expectedResp  *httpcache.ResponseData
 		wantStoreErr  bool
 		wantLookupErr bool
 	}
@@ -166,11 +157,12 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 			name:      "found",
 			storedReq: newReq(withReqUrl("https://example.com/path?a=1")),
 			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
+				withRespHeader("Cache-Control", "public, max-age=120"),
+				withRespBody(`hello world`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
-				withRespHeader("Cache-Control", "public, max-age=120")),
+				withRespHeader("Cache-Control", "public, max-age=120"),
+				withRespBody(`hello world`)),
 		},
 		{
 			name:      "found for HEAD request",
@@ -179,7 +171,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("Cache-Control", "public, max-age=120")),
 			lookupReq: newReq(withReqMethod("HEAD")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120")),
 		},
 		{
@@ -194,15 +185,14 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 			storedReq: newReq(
 				withReqMethod("QUERY"),
 				withReqHeader("Content-Type", "application/json"),
-				withReqBody(strings.NewReader(`{"query": "test"}`))),
+				withReqBody(`{"query": "test"}`)),
 			storedResp: newResp(
 				withRespHeader("Cache-Control", "public, max-age=120")),
 			lookupReq: newReq(
 				withReqMethod("QUERY"),
 				withReqHeader("Content-Type", "application/json"),
-				withReqBody(strings.NewReader(`{"query": "test"}`))),
+				withReqBody(`{"query": "test"}`)),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120")),
 		},
 		{
@@ -210,13 +200,13 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 			storedReq: newReq(
 				withReqMethod("QUERY"),
 				withReqHeader("Content-Type", "application/json"),
-				withReqBody(strings.NewReader(`{"query": "test"}`))),
+				withReqBody(`{"query": "test"}`)),
 			storedResp: newResp(
 				withRespHeader("Cache-Control", "public, max-age=120")),
 			lookupReq: newReq(
 				withReqMethod("QUERY"),
 				withReqHeader("Content-Type", "application/json"),
-				withReqBody(strings.NewReader(`{"query": "test1"}`))),
+				withReqBody(`{"query": "test1"}`)),
 		},
 		{
 			name:      "not found for URL with different scheme",
@@ -268,7 +258,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `params=("b")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `params=("b")`)),
 		},
@@ -288,7 +277,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 		},
@@ -315,7 +303,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `params=("c")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `params=("c")`)),
 		},
@@ -335,7 +322,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 		},
@@ -362,7 +348,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `params=("b")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `params=("b")`)),
 		},
@@ -382,7 +367,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", `except=("a")`)),
 		},
@@ -409,7 +393,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("No-Vary-Search", "key-order")),
 			lookupReq: newReq(withReqUrl("https://example.com/path?b=2&a=1")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("No-Vary-Search", "key-order")),
 		},
@@ -428,7 +411,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withReqHeader("Header-2", "Value-2"),
 				withReqHeader("Header-3", "Changed value")),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=120"),
 				withRespHeader("Vary", "Header-1, Header-2")),
 		},
@@ -460,37 +442,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withReqHeader("Header-2", "Value-2"),
 				withReqHeader("Header-3", "Value-3")),
 		},
-
-		{
-			name: "error returned for request whose body can not be read when storing",
-			storedReq: newReq(
-				withReqMethod("QUERY"),
-				withReqBody(errReader{})),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			wantStoreErr: true,
-		},
-		{
-			name: "error returned for request whose body can not be read when looking up",
-			storedReq: newReq(
-				withReqMethod("QUERY"),
-				withReqBody(strings.NewReader("{}"))),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(
-				withReqMethod("QUERY"),
-				withReqBody(errReader{})),
-			wantLookupErr: true,
-		},
-
-		{
-			name:      "error returned for response when body can not be read",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespBody(errReader{}),
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			wantStoreErr: true,
-		},
 	}
 
 	if cfg.ReturnsNilForExpiredResponses {
@@ -504,7 +455,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 					withRespHeader("Cache-Control", "public, max-age=61")),
 				lookupReq: newReq(),
 				expectedResp: newResp(
-					withRespHeader("Age", "60"),
 					withRespHeader("Cache-Control", "public, max-age=61")),
 			},
 			{
@@ -530,7 +480,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 				withRespHeader("Cache-Control", "public, max-age=5")),
 			lookupReq: newReq(),
 			expectedResp: newResp(
-				withRespHeader("Age", "60"),
 				withRespHeader("Cache-Control", "public, max-age=5")),
 		})
 	}
@@ -554,7 +503,6 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 					withRespHeader("No-Vary-Search", `key-order=invalid`)),
 				lookupReq: newReq(),
 				expectedResp: newResp(
-					withRespHeader("Age", "60"),
 					withRespHeader("Cache-Control", "public, max-age=120"),
 					withRespHeader("No-Vary-Search", `key-order=invalid`)),
 			},
@@ -574,7 +522,13 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 			synctest.Test(t, func(t *testing.T) {
 				s := f()
 
-				if err := s.Set(t.Context(), tt.storedReq, time.Now(), tt.storedResp, time.Now()); err != nil {
+				storedReq := *tt.storedReq
+				storedReq.Time = time.Now()
+
+				storedResp := *tt.storedResp
+				storedResp.Time = time.Now()
+
+				if err := s.Set(t.Context(), storedReq, storedResp); err != nil {
 					if tt.wantStoreErr {
 						return
 					}
@@ -587,11 +541,7 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 
 				time.Sleep(time.Minute)
 
-				gotResp, gotErr := s.Get(t.Context(), tt.lookupReq)
-
-				if gotResp != nil && gotResp.Body != nil {
-					_ = gotResp.Body.Close()
-				}
+				gotResp, gotErr := s.Get(t.Context(), *tt.lookupReq)
 
 				switch {
 				case tt.wantLookupErr && gotErr == nil:
@@ -621,17 +571,7 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 	}
 }
 
-func formatRespForError(tb testing.TB, resp *http.Response) string {
-	var body []byte
-
-	if resp.Body != nil {
-		var err error
-
-		if body, err = io.ReadAll(resp.Body); err != nil {
-			tb.Fatalf("failed to read response body: %v", err)
-		}
-	}
-
+func formatRespForError(tb testing.TB, resp *httpcache.ResponseData) string {
 	type respForError struct {
 		Status     string      `json:"Status"`
 		StatusCode int         `json:"StatusCode"`
@@ -644,7 +584,7 @@ func formatRespForError(tb testing.TB, resp *http.Response) string {
 		Status:     resp.Status,
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
-		Body:       string(body),
+		Body:       string(resp.Body),
 		Trailer:    resp.Trailer,
 	})
 	if err != nil {

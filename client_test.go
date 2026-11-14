@@ -2,7 +2,11 @@ package httpcache_test
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"hash/maphash"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nussjustin/httpcache"
+	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
 func headerEqual(a, b http.Header) bool {
@@ -43,56 +48,62 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-type testStore struct {
+type memoryStore struct {
 	entriesMu sync.Mutex
-	entries   map[string]*testStoreEntry
+	entries   map[string]httpcache.ResponseData
 }
 
-type testStoreEntry struct {
-	resp     *http.Response
-	respTime time.Time
+var _ httpcache.Store = (*memoryStore)(nil)
+
+var seed = maphash.MakeSeed()
+
+func (t *memoryStore) key(req httpcache.RequestData) string {
+	var h maphash.Hash
+	h.SetSeed(seed)
+
+	if _, err := httpcacheutil.HashRequest(&h, req.Method, req.URL, req.Body); err != nil {
+		panic(fmt.Errorf("HashRequest returned an error: %w", err))
+	}
+
+	var b1 [8]byte
+	binary.BigEndian.PutUint64(b1[:], h.Sum64())
+
+	var b2 [8 * 2]byte
+	hex.Encode(b2[:], b1[:])
+
+	return string(b2[:])
 }
 
-func (t *testStore) key(req *http.Request) string {
-	// The query is handled by the URLVariationCOnfig
-	urlWithoutQuery := *req.URL
-	urlWithoutQuery.RawQuery = ""
-	return req.Method + " " + urlWithoutQuery.String()
-}
-
-func (t *testStore) Get(_ context.Context, req *http.Request) (resp *http.Response, err error) {
+func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
 	key := t.key(req)
 
 	t.entriesMu.Lock()
 	defer t.entriesMu.Unlock()
 
-	e := t.entries[key]
-	if e == nil {
+	respVal, ok := t.entries[key]
+	if !ok {
 		return nil, nil
 	}
 
-	resp = e.resp
-	resp.Header.Set("Age", strconv.Itoa(int(time.Since(e.respTime).Seconds())))
-
-	return resp, nil
+	return new(respVal), nil
 }
 
-func (t *testStore) Set(_ context.Context, req *http.Request, _ time.Time, resp *http.Response, respTime time.Time) error {
+func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
 	key := t.key(req)
 
 	t.entriesMu.Lock()
 	defer t.entriesMu.Unlock()
 
 	if t.entries == nil {
-		t.entries = make(map[string]*testStoreEntry)
+		t.entries = make(map[string]httpcache.ResponseData)
 	}
 
-	t.entries[key] = &testStoreEntry{resp: resp, respTime: respTime}
+	t.entries[key] = resp
 
 	return nil
 }
 
-type trackingStore struct {
+type testStore struct {
 	httpcache.Store
 	failOnGet   bool
 	failOnStore bool
@@ -101,26 +112,32 @@ type trackingStore struct {
 
 var errStoreFail = errors.New("fail on store")
 
-func (t *trackingStore) Get(ctx context.Context, req *http.Request) (resp *http.Response, err error) {
+func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, err error) {
 	if t.failOnGet {
 		return nil, errStoreFail
 	}
 	return t.Store.Get(ctx, req)
 }
 
-func (t *trackingStore) Set(
-	ctx context.Context,
-	req *http.Request, reqTime time.Time,
-	resp *http.Response, respTime time.Time,
-) error {
+func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) error {
 	if t.failOnStore {
 		return errStoreFail
 	}
 	t.stored++
-	return t.Store.Set(ctx, req, reqTime, resp, respTime)
+	return t.Store.Set(ctx, req, resp)
 }
 
 type reqOpt func(*http.Request)
+
+func withReqBody(r io.Reader) reqOpt {
+	return func(req *http.Request) {
+		rc, ok := r.(io.ReadCloser)
+		if !ok {
+			rc = io.NopCloser(r)
+		}
+		req.Body = rc
+	}
+}
 
 func withReqHeader(name, value string) reqOpt {
 	return func(req *http.Request) {
@@ -202,6 +219,16 @@ func newResp(opts ...respOpt) *http.Response {
 }
 
 func TestClient_Do(t *testing.T) {
+	t.Run("without cache status", func(t *testing.T) {
+		testClientDo(t, false)
+	})
+
+	t.Run("with cache status", func(t *testing.T) {
+		testClientDo(t, true)
+	})
+}
+
+func testClientDo(t *testing.T, withCacheStatus bool) {
 	type transaction struct {
 		req             *http.Request
 		resp            *http.Response
@@ -214,6 +241,7 @@ func TestClient_Do(t *testing.T) {
 		wantResp        *http.Response
 		wantRespErr     bool
 	}
+
 	tests := []struct {
 		name   string
 		config httpcache.Config
@@ -822,7 +850,19 @@ func TestClient_Do(t *testing.T) {
 			},
 		},
 		{
-			name: "error when cloning response",
+			name: "error when reading request body",
+			txs: []transaction{
+				{
+					req:         newReq(withReqBody(errReader{})),
+					resp:        newResp(),
+					wantReq:     newReq(withReqBody(errReader{})),
+					wantResp:    newResp(),
+					wantRespErr: true,
+				},
+			},
+		},
+		{
+			name: "error when reading response body",
 			txs: []transaction{
 				{
 					req:         newReq(),
@@ -860,20 +900,20 @@ func TestClient_Do(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		run := func(t *testing.T, withCacheStatus bool) {
+		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				tt.config.AddCacheStatus = withCacheStatus
 				tt.config.Name = "my-cache"
 
-				var store testStore
+				var sharedStore memoryStore
 
 				for i, tx := range tt.txs {
 					if tx.resp != nil {
 						tx.resp.Header.Set("Transaction-Id", strconv.Itoa(i))
 					}
 
-					store := &trackingStore{
-						Store:       &store,
+					store := &testStore{
+						Store:       &sharedStore,
 						failOnGet:   tx.failOnGet,
 						failOnStore: tx.failOnStore,
 					}
@@ -940,14 +980,75 @@ func TestClient_Do(t *testing.T) {
 					time.Sleep(time.Minute)
 				}
 			})
-		}
-
-		t.Run(tt.name, func(t *testing.T) {
-			run(t, false)
 		})
+	}
+}
 
-		t.Run(tt.name+" (with cache status)", func(t *testing.T) {
-			run(t, true)
+func TestStoreResponse_Age(t *testing.T) {
+	tests := []struct {
+		name string
+		resp func(time.Time) httpcache.ResponseData
+		want time.Duration
+	}{
+		{
+			name: "no Date header",
+			resp: func(time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{}
+			},
+			want: time.Minute,
+		},
+		{
+			name: "single Date header",
+			resp: func(now time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{now.Add(-5 * time.Minute).UTC().Format(http.TimeFormat)},
+					},
+				}
+			},
+			want: 6 * time.Minute,
+		},
+		{
+			name: "invalid Date header",
+			resp: func(time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{"invalid"},
+					},
+				}
+			},
+			want: time.Minute,
+		},
+		{
+			name: "multiple Date headers",
+			resp: func(now time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{
+							now.Add(-5 * time.Minute).Format(http.TimeFormat),
+							now.Add(-10 * time.Minute).Format(http.TimeFormat),
+						},
+					},
+				}
+			},
+			want: time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now()
+
+				resp := tt.resp(now)
+				resp.Time = now
+
+				synctest.Sleep(time.Minute)
+
+				if got := resp.Age(); got != tt.want {
+					t.Errorf("StoreResponse.Age() = %s, want %s", got, tt.want)
+				}
+			})
 		})
 	}
 }
