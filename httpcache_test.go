@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -546,8 +547,8 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 			name: `cacheable with extension func`,
 			config: httpcache.Config{
 				CacheableByExtensionFunc: func(req httpcache.RequestData, resp httpcache.ResponseData) bool {
-					for _, ext := range resp.ParsedDirectives.Extensions {
-						if ext.Name == "custom-directive" && ext.Value.Value == "true" {
+					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
+						if ext.Value.Value == "true" {
 							return true
 						}
 					}
@@ -569,8 +570,8 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 			name: `non-cacheable with extension func`,
 			config: httpcache.Config{
 				CacheableByExtensionFunc: func(req httpcache.RequestData, resp httpcache.ResponseData) bool {
-					for _, ext := range resp.ParsedDirectives.Extensions {
-						if ext.Name == "custom-directive" && ext.Value.Value == "true" {
+					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
+						if ext.Value.Value == "true" {
 							return true
 						}
 					}
@@ -1353,6 +1354,50 @@ func TestVary_Wildcard(t *testing.T) {
 	}
 }
 
+func TestExtensionDirectives_Named(t *testing.T) {
+	es := httpcache.ExtensionDirectives{
+		{Name: "directive-a", Value: OptValue("1")},
+		{Name: "directive-b", Value: OptValue("2")},
+		{Name: "directive-b", Value: OptValue("3")},
+		{Name: "directive-a", Value: OptValue("4")},
+		{Name: "directive-c", Value: OptValue("5")},
+		{Name: "directive-b", Value: OptValue("7")},
+	}
+
+	gotA := slices.Collect(es.Named("directive-a"))
+	wantA := httpcache.ExtensionDirectives{
+		{Name: "directive-a", Value: OptValue("1")},
+		{Name: "directive-a", Value: OptValue("4")},
+	}
+	if !slices.Equal(gotA, wantA) {
+		t.Errorf("Named(%q) = %v, want = %v", "directive-a", gotA, wantA)
+	}
+
+	gotB := slices.Collect(es.Named("directive-b"))
+	wantB := httpcache.ExtensionDirectives{
+		{Name: "directive-b", Value: OptValue("2")},
+		{Name: "directive-b", Value: OptValue("3")},
+		{Name: "directive-b", Value: OptValue("7")},
+	}
+	if !slices.Equal(gotB, wantB) {
+		t.Errorf("Named(%q) = %v, want = %v", "directive-b", gotB, wantB)
+	}
+
+	gotC := slices.Collect(es.Named("directive-c"))
+	wantC := httpcache.ExtensionDirectives{
+		{Name: "directive-c", Value: OptValue("5")},
+	}
+	if !slices.Equal(gotC, wantC) {
+		t.Errorf("Named(%q) = %v, want = %v", "directive-c", gotC, wantC)
+	}
+
+	gotD := slices.Collect(es.Named("directive-d"))
+	wantD := httpcache.ExtensionDirectives{}
+	if !slices.Equal(gotD, wantD) {
+		t.Errorf("Named(%q) = %v, want = %v", "directive-d", gotD, wantD)
+	}
+}
+
 func OptValue[T any](t T) httpcache.Opt[T] {
 	return httpcache.Opt[T]{Value: t, Valid: true}
 }
@@ -1398,7 +1443,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1408,7 +1453,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			name: `extensions only`,
 			in:   `extra, extra-with-value="test"`,
 			want: httpcache.RequestDirectives{
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1439,7 +1484,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
@@ -1464,7 +1509,7 @@ func TestParseRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
@@ -1550,7 +1595,7 @@ func TestParseRequestDirectives(t *testing.T) {
 			want: httpcache.RequestDirectives{
 				NoCache: true,
 				NoStore: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra-with-value", Value: OptValue(`"test`)},
 				},
 			},
@@ -1632,7 +1677,7 @@ func TestParseTargetedRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1642,7 +1687,7 @@ func TestParseTargetedRequestDirectives(t *testing.T) {
 			name: `extensions only`,
 			in:   `extra, extra-with-value="test"`,
 			want: httpcache.RequestDirectives{
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1665,7 +1710,7 @@ func TestParseTargetedRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
@@ -1683,7 +1728,7 @@ func TestParseTargetedRequestDirectives(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
@@ -1845,7 +1890,7 @@ func TestRequestDirectives_String(t *testing.T) {
 				NoStore:      true,
 				NoTransform:  true,
 				OnlyIfCached: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1914,7 +1959,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(200 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1924,7 +1969,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			name: `extensions only`,
 			in:   `extra, extra-with-value="test"`,
 			want: httpcache.ResponseDirectives{
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -1965,7 +2010,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(0 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
@@ -1994,7 +2039,7 @@ func TestParseResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(200 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 					{Name: "extra"},
@@ -2056,7 +2101,7 @@ func TestParseResponseDirectives(t *testing.T) {
 			want: httpcache.ResponseDirectives{
 				NoCache: true,
 				NoStore: true,
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra-with-value", Value: OptValue(`"test`)},
 				},
 			},
@@ -2152,7 +2197,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(200 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -2162,7 +2207,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 			name: `extensions only`,
 			in:   `extra, extra-with-value="test"`,
 			want: httpcache.ResponseDirectives{
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},
@@ -2190,7 +2235,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(250 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
@@ -2213,7 +2258,7 @@ func TestParseTargetedResponseDirectives(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(200 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test2")},
 				},
@@ -2378,7 +2423,7 @@ func TestResponseDirectives_String(t *testing.T) {
 				ProxyRevalidate: true,
 				Public:          true,
 				SMaxAge:         OptValue(200 * time.Second),
-				Extensions: []httpcache.ExtensionDirective{
+				Extensions: httpcache.ExtensionDirectives{
 					{Name: "extra"},
 					{Name: "extra-with-value", Value: OptValue("test")},
 				},

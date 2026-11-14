@@ -628,6 +628,20 @@ func (e ExtensionDirective) String() string {
 	return e.Name
 }
 
+// ExtensionDirectives contains non-standard Cache-Control directives.
+type ExtensionDirectives []ExtensionDirective
+
+// Named returns all directives with the given name.
+func (es ExtensionDirectives) Named(name string) iter.Seq[ExtensionDirective] {
+	return func(yield func(ExtensionDirective) bool) {
+		for _, e := range es {
+			if e.Name == name && !yield(e) {
+				return
+			}
+		}
+	}
+}
+
 // Opt represents a potentially unset value.
 type Opt[T any] struct {
 	// Value is the value if set or the zero value of T otherwise.
@@ -665,7 +679,7 @@ type RequestDirectives struct {
 	// The directive names are always lower cased.
 	//
 	// If the parsed header contained duplicate directives, this slice will also contain these duplicate directives.
-	Extensions []ExtensionDirective
+	Extensions ExtensionDirectives
 }
 
 var (
@@ -897,7 +911,7 @@ type ResponseDirectives struct {
 	// The directive names are always lower cased.
 	//
 	// If the parsed header contained duplicate directives, this slice will also contain these duplicate directives.
-	Extensions []ExtensionDirective
+	Extensions ExtensionDirectives
 }
 
 // ParseResponseDirectives parses a Cache-Control response header and returns a struct of the parsed directives.
