@@ -30,7 +30,7 @@ type Config struct {
 	// CacheableByExtensionFunc is an optional function that is called when checking if a response can be cached.
 	//
 	// If the function returns true, the response is considered cacheable.
-	CacheableByExtensionFunc func(*http.Response, ResponseDirectives) bool
+	CacheableByExtensionFunc func(req RequestData, resp ResponseData) bool
 
 	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
 	//
@@ -115,20 +115,18 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusNotImplemented,
 }
 
-// AllowsStoringResponse checks if the given response can be cached.
+// AllowsStoringResponse checks if the given response data can be cached.
 //
-// The response must have an associated request.
-func (c Config) AllowsStoringResponse(resp *http.Response) bool {
+// Note that the response data may not contain a body.
+func (c Config) AllowsStoringResponse(req RequestData, resp ResponseData) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:
 
 	// - the request method is understood by the cache;
-	if !c.isSupportedRequestMethod(resp.Request.Method) {
+	if !c.isSupportedRequestMethod(req.Method) {
 		return false
 	}
-
-	respDirectives, _ := c.ParseResponseDirectives(resp.Header)
 
 	// - the response status code is final (see Section 15 of [HTTP]);
 	if resp.StatusCode < 200 {
@@ -137,43 +135,43 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 
 	// - if the response status code is 206 or 304, or the must-understand cache directive (see Section 5.2.2.3) is
 	//   present: the cache understands the response status code
-	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || respDirectives.MustUnderstand {
+	if resp.StatusCode == http.StatusPartialContent || resp.StatusCode == http.StatusNotModified || resp.ParsedDirectives.MustUnderstand {
 		if !c.isUnderstoodResponseCode(resp.StatusCode) {
 			return false
 		}
 	}
 
 	// - the no-store cache directive is not present in the response (see Section 5.2.2.5);
-	if respDirectives.NoStore {
+	if resp.ParsedDirectives.NoStore {
 		return false
 	}
 
 	// - if the cache is shared: the private response directive is either not present or allows a shared cache to store
 	//   a modified response; see Section 5.2.2.7);
-	if !c.Private && respDirectives.Private && (!c.RespectResponseDirectivePrivateValue || len(respDirectives.PrivateHeaders) == 0) {
+	if !c.Private && resp.ParsedDirectives.Private && (!c.RespectResponseDirectivePrivateValue || len(resp.ParsedDirectives.PrivateHeaders) == 0) {
 		return false
 	}
 
 	// - if the cache is shared: the Authorization header field is not present in the request (see Section 11.6.2 of
 	//   [HTTP]) or a response directive is present that explicitly allows shared caching (see Section 3.5); and
-	if !c.Private && len(resp.Request.Header["Authorization"]) != 0 && !respDirectives.MustRevalidate && !respDirectives.Public && !respDirectives.SMaxAge.Valid {
+	if !c.Private && len(req.Header["Authorization"]) != 0 && !resp.ParsedDirectives.MustRevalidate && !resp.ParsedDirectives.Public && !resp.ParsedDirectives.SMaxAge.Valid {
 		return false
 	}
 
 	// - the response contains at least one of the following
 	switch {
 	// a public response directive (see Section 5.2.2.9);
-	case respDirectives.Public:
+	case resp.ParsedDirectives.Public:
 	// a private response directive, if the cache is not shared (see Section 5.2.2.7);
-	case c.Private && respDirectives.Private:
+	case c.Private && resp.ParsedDirectives.Private:
 	// an Expires header field (see Section 5.3);
 	case hasValidExpires(resp.Header):
 	// a max-age response directive (see Section 5.2.2.1);
-	case respDirectives.MaxAge.Valid:
+	case resp.ParsedDirectives.MaxAge.Valid:
 	// if the cache is shared: an s-maxage response directive (see Section 5.2.2.10);
-	case !c.Private && respDirectives.SMaxAge.Valid:
+	case !c.Private && resp.ParsedDirectives.SMaxAge.Valid:
 	// a cache extension that allows it to be cached (see Section 5.2.3); or
-	case c.CacheableByExtensionFunc != nil && c.CacheableByExtensionFunc(resp, respDirectives):
+	case c.CacheableByExtensionFunc != nil && c.CacheableByExtensionFunc(req, resp):
 	// a status code that is defined as heuristically cacheable (see Section 4.2.2).
 	case c.isHeuristicallyCacheableStatusCode(resp.StatusCode):
 	default:
@@ -181,18 +179,19 @@ func (c Config) AllowsStoringResponse(resp *http.Response) bool {
 	}
 
 	if c.RespectRequestDirectiveNoStore {
-		var reqDirectives RequestDirectives
-		if s := strings.Join(resp.Request.Header["Cache-Control"], ","); s != "" {
-			reqDirectives, _ = ParseRequestDirectives(s)
-		}
-
 		// Note: This is not actually part of "3. Storing Responses in Caches".
-		if reqDirectives.NoStore {
+		if req.ParsedDirectives.NoStore {
 			return false
 		}
 	}
 
 	return true
+}
+
+// ParseRequestDirectives parses the Cache-Control directives for a request by joining all Cache-Control headers with a
+// comma and passing the result to [ParseRequestDirectives].
+func (c Config) ParseRequestDirectives(h http.Header) (RequestDirectives, error) {
+	return ParseRequestDirectives(strings.Join(h["Cache-Control"], ","))
 }
 
 // ParseResponseDirectives parses the Cache-Control directives for a response, respecting the targeted cache control
@@ -695,12 +694,18 @@ func ParseRequestDirectives(header string) (RequestDirectives, error) {
 }
 
 // ParseTargetedRequestDirectives is like [ParseRequestDirectives], but parses a targeted Cache-Control header as
-// specified in RFC9213, treating the header as a structured field dictionary.
+// specified in RFC 9213, treating the header as a structured field dictionary.
+//
+// Note that RFC 9213 only specifies the Cache-Control header for the response, not for the request.
 func ParseTargetedRequestDirectives(header string) (RequestDirectives, error) {
 	return parseRequestDirectives(header, true)
 }
 
 func parseRequestDirectives(header string, targeted bool) (RequestDirectives, error) {
+	if header == "" {
+		return RequestDirectives{}, nil
+	}
+
 	var seq iter.Seq2[cachecontrol.Directive, error]
 	if targeted {
 		seq = cachecontrol.ParseTargeted(header)
@@ -907,12 +912,16 @@ func ParseResponseDirectives(header string) (ResponseDirectives, error) {
 }
 
 // ParseTargetedResponseDirectives is like [ParseResponseDirectives], but parses a targeted Cache-Control header as
-// specified in RFC9213, treating the header as a structured field dictionary.
+// specified in RFC 9213, treating the header as a structured field dictionary.
 func ParseTargetedResponseDirectives(header string) (ResponseDirectives, error) {
 	return parseResponseDirectives(header, true)
 }
 
 func parseResponseDirectives(header string, targeted bool) (ResponseDirectives, error) {
+	if header == "" {
+		return ResponseDirectives{}, nil
+	}
+
 	var seq iter.Seq2[cachecontrol.Directive, error]
 	if targeted {
 		seq = cachecontrol.ParseTargeted(header)

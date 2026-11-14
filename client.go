@@ -85,10 +85,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		return resp, status, err
 	}
 
-	var reqDirectives RequestDirectives
-	if s := strings.Join(req.Header["Cache-Control"], ","); s != "" {
-		reqDirectives, _ = ParseRequestDirectives(s)
-	}
+	reqDirectives, _ := c.Config.ParseRequestDirectives(req.Header)
 
 	if c.Config.RespectRequestDirectiveNoCache && reqDirectives.NoCache {
 		resp, err := client.Do(req)
@@ -96,12 +93,12 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 		return resp, status, err
 	}
 
-	storeReq, err := requestDataFromRequest(req, reqDirectives)
+	reqData, err := requestDataFromRequest(req, reqDirectives)
 	if err != nil {
 		return nil, Status{}, err
 	}
 
-	stored, err := c.Store.Get(req.Context(), storeReq)
+	stored, err := c.Store.Get(req.Context(), reqData)
 
 	if stored != nil && err == nil {
 		age := stored.Age()
@@ -200,15 +197,17 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 
 	respDirectives, _ := c.Config.ParseResponseDirectives(resp.Header)
 
-	if c.Config.AllowsStoringResponse(resp) {
-		storeResp, err := responseDataFromResponse(resp, respDirectives)
-		if err != nil {
+	// Do not read the body before we know whether we need to cache the response
+	respData := responseDataFromResponseWithoutBody(resp, respDirectives)
+
+	if c.Config.AllowsStoringResponse(reqData, respData) {
+		if respData.Body, err = readBody(resp); err != nil {
 			return nil, Status{}, err
 		}
 
-		c.Config.RemoveUnstorableHeaders(storeResp.Header)
+		c.Config.RemoveUnstorableHeaders(respData.Header)
 
-		if err := c.Store.Set(req.Context(), storeReq, storeResp); err == nil {
+		if err := c.Store.Set(req.Context(), reqData, respData); err == nil {
 			status.Stored = true
 		}
 	}
@@ -268,25 +267,9 @@ type RequestData struct {
 }
 
 func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (RequestData, error) {
-	var body []byte
-
-	if req.Body != nil {
-		defer func() {
-			_ = req.Body.Close()
-
-			req.Body = io.NopCloser(bytes.NewReader(body))
-			req.ContentLength = int64(len(body))
-		}()
-
-		if req.ContentLength > 0 {
-			body = make([]byte, 0, int(req.ContentLength))
-		}
-
-		var err error
-
-		if body, err = io.ReadAll(req.Body); err != nil {
-			return RequestData{}, err
-		}
+	body, err := readBody(req)
+	if err != nil {
+		return RequestData{}, err
 	}
 
 	return RequestData{
@@ -364,35 +347,53 @@ func (s *ResponseData) restore(req *http.Request) *http.Response {
 	}
 }
 
-func responseDataFromResponse(resp *http.Response, respDirectives ResponseDirectives) (ResponseData, error) {
-	var body []byte
-
-	if resp.Body != nil {
-		defer func() {
-			_ = resp.Body.Close()
-
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-			resp.ContentLength = int64(len(body))
-		}()
-
-		if resp.ContentLength > 0 {
-			body = make([]byte, 0, int(resp.ContentLength))
-		}
-
-		var err error
-
-		if body, err = io.ReadAll(resp.Body); err != nil {
-			return ResponseData{}, err
-		}
-	}
-
+func responseDataFromResponseWithoutBody(resp *http.Response, respDirectives ResponseDirectives) ResponseData {
 	return ResponseData{
 		Time:             time.Now(),
 		Status:           resp.Status,
 		StatusCode:       resp.StatusCode,
 		Header:           resp.Header.Clone(),
-		Body:             body,
 		Trailer:          resp.Trailer.Clone(),
 		ParsedDirectives: respDirectives,
-	}, nil
+	}
+}
+
+func readBody[T http.Request | http.Response](t *T) (body []byte, err error) {
+	var contentLength int64
+	var reader io.ReadCloser
+
+	switch x := any(t).(type) {
+	case *http.Request:
+		contentLength = x.ContentLength
+		reader = x.Body
+	case *http.Response:
+		contentLength = x.ContentLength
+		reader = x.Body
+	}
+
+	if reader == nil {
+		return nil, nil
+	}
+
+	defer func() {
+		switch x := any(t).(type) {
+		case *http.Request:
+			x.ContentLength = int64(len(body))
+			x.Body = io.NopCloser(bytes.NewReader(body))
+		case *http.Response:
+			x.ContentLength = int64(len(body))
+			x.Body = io.NopCloser(bytes.NewReader(body))
+		}
+
+		if cerr := reader.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	if contentLength > 0 {
+		body = make([]byte, 0, int(contentLength))
+	}
+
+	body, err = io.ReadAll(reader)
+	return body, err
 }
