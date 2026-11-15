@@ -2,25 +2,19 @@ package httpcache_test
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"hash/maphash"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/nussjustin/httpcache"
-	"github.com/nussjustin/httpcache/httpcacheutil"
+	"github.com/nussjustin/httpcache/httpcachetest"
 )
 
 func headerEqual(a, b http.Header) bool {
@@ -49,92 +43,6 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-type memoryStore struct {
-	entriesMu sync.Mutex
-	entries   map[string]*memoryStoreEntry
-}
-
-type memoryStoreEntry struct {
-	origin httpcacheutil.Origin
-	req    httpcache.RequestData
-	resp   httpcache.ResponseData
-}
-
-var _ httpcache.Store = (*memoryStore)(nil)
-
-var seed = maphash.MakeSeed()
-
-func (t *memoryStore) key(req httpcache.RequestData) string {
-	var h maphash.Hash
-	h.SetSeed(seed)
-
-	if _, err := httpcacheutil.HashRequest(&h, req.Method, req.URL, req.Body); err != nil {
-		panic(fmt.Errorf("HashRequest returned an error: %w", err))
-	}
-
-	var b1 [8]byte
-	binary.BigEndian.PutUint64(b1[:], h.Sum64())
-
-	var b2 [8 * 2]byte
-	hex.Encode(b2[:], b1[:])
-
-	return string(b2[:])
-}
-
-func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
-	key := t.key(req)
-
-	t.entriesMu.Lock()
-	defer t.entriesMu.Unlock()
-
-	e, ok := t.entries[key]
-	if !ok {
-		return nil, "memory:miss", nil
-	}
-
-	return new(e.resp), "memory:hit", nil
-}
-
-func (t *memoryStore) Invalidate(_ context.Context, url_ url.URL) error {
-	origin := httpcacheutil.MustOriginFromURL(url_)
-
-	escapedPath := url_.EscapedPath()
-
-	t.entriesMu.Lock()
-	defer t.entriesMu.Unlock()
-
-	maps.DeleteFunc(t.entries, func(_ string, entry *memoryStoreEntry) bool {
-		if !origin.Same(entry.origin) {
-			return false
-		}
-
-		if entry.req.URL.EscapedPath() != escapedPath {
-			return false
-		}
-
-		return true
-	})
-
-	return nil
-}
-
-func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
-	key := t.key(req)
-
-	origin, _ := httpcacheutil.OriginFromURL(req.URL)
-
-	t.entriesMu.Lock()
-	defer t.entriesMu.Unlock()
-
-	if t.entries == nil {
-		t.entries = make(map[string]*memoryStoreEntry)
-	}
-
-	t.entries[key] = &memoryStoreEntry{origin: origin, req: req, resp: resp}
-
-	return "", nil
-}
-
 type testStore struct {
 	httpcache.Store
 	failOnGet   bool
@@ -149,7 +57,13 @@ func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *h
 	if t.failOnGet {
 		return nil, "fail-on-get", errStoreFail
 	}
-	return t.Store.Get(ctx, req)
+	resp, _, err = t.Store.Get(ctx, req)
+	if resp != nil {
+		detail = "hit"
+	} else {
+		detail = "miss"
+	}
+	return
 }
 
 func (t *testStore) Invalidate(ctx context.Context, url_ url.URL) error {
@@ -307,7 +221,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
-						Detail: "memory:hit",
+						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
@@ -373,7 +287,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
-						Detail:          "memory:hit",
+						Detail:          "hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -417,7 +331,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
-						Detail:          "memory:hit",
+						Detail:          "hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -498,7 +412,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
-						Detail:          "memory:hit",
+						Detail:          "hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -582,7 +496,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespStatus(http.StatusNotModified)),
 					wantCacheStatus: httpcache.Status{
 						Cache:           "my-cache",
-						Detail:          "memory:hit",
+						Detail:          "hit",
 						Forwarded:       httpcache.ForwardedReasonStale,
 						ForwardedStatus: http.StatusNotModified,
 					},
@@ -735,7 +649,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(withReqHeader("Cache-Control", "only-if-cached")),
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
-						Detail:    "memory:miss",
+						Detail:    "miss",
 						Forwarded: httpcache.ForwardedReasonMiss,
 					},
 					wantResp: newResp(
@@ -759,7 +673,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(withReqHeader("Cache-Control", "only-if-cached")),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
-						Detail: "memory:hit",
+						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
@@ -779,7 +693,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120, no-store")),
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
-						Detail:    "memory:miss",
+						Detail:    "miss",
 						Forwarded: httpcache.ForwardedReasonMiss,
 					},
 					wantStored: 0,
@@ -816,7 +730,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
-						Detail: "memory:hit",
+						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
@@ -955,7 +869,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					failOnStore: true,
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
-						Detail:    "memory:miss",
+						Detail:    "miss",
 						Forwarded: httpcache.ForwardedReasonMiss,
 					},
 					wantReq: newReq(),
@@ -1011,7 +925,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req: newReq(),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
-						Detail: "memory:hit",
+						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
@@ -1306,7 +1220,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 				tt.config.AddCacheStatus = withCacheStatus
 				tt.config.Name = "my-cache"
 
-				var sharedStore memoryStore
+				var sharedStore httpcachetest.MemoryStore
 
 				for i, tx := range tt.txs {
 					if tx.resp != nil {
