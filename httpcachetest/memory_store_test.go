@@ -14,7 +14,9 @@ import (
 func TestMemoryStore(t *testing.T) {
 	t.Run("Default", func(t *testing.T) {
 		httpcachetest.TestStore(t,
-			httpcachetest.TestStoreOpts{},
+			httpcachetest.TestStoreOpts{
+				SupportsCacheGroups: true,
+			},
 			func() httpcache.Store {
 				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{})
 			},
@@ -23,7 +25,9 @@ func TestMemoryStore(t *testing.T) {
 
 	t.Run("ReturnDetailString", func(t *testing.T) {
 		httpcachetest.TestStore(t,
-			httpcachetest.TestStoreOpts{},
+			httpcachetest.TestStoreOpts{
+				SupportsCacheGroups: true,
+			},
 			func() httpcache.Store {
 				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
 					ReturnDetailString: true,
@@ -36,6 +40,7 @@ func TestMemoryStore(t *testing.T) {
 		httpcachetest.TestStore(t,
 			httpcachetest.TestStoreOpts{
 				ReturnsNilForExpiredResponses: true,
+				SupportsCacheGroups:           true,
 			},
 			func() httpcache.Store {
 				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
@@ -50,6 +55,7 @@ func TestMemoryStore(t *testing.T) {
 			httpcachetest.TestStoreOpts{
 				ReturnsNilForExpiredResponses:      true,
 				ReturnsNilForExpiredResponsesAfter: 30 * time.Second,
+				SupportsCacheGroups:                true,
 			},
 			func() httpcache.Store {
 				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
@@ -63,6 +69,7 @@ func TestMemoryStore(t *testing.T) {
 	t.Run("ValidatesNoVarySearch", func(t *testing.T) {
 		httpcachetest.TestStore(t,
 			httpcachetest.TestStoreOpts{
+				SupportsCacheGroups:   true,
 				ValidatesNoVarySearch: true,
 			},
 			func() httpcache.Store {

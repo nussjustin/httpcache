@@ -120,6 +120,9 @@ type TestStoreOpts struct {
 	// Must be in full seconds, and in the range [1, 60).
 	ReturnsNilForExpiredResponsesAfter time.Duration
 
+	// SupportsCacheGroups must be true if the Store supports invalidation via cache groups.
+	SupportsCacheGroups bool
+
 	// ValidatesNoVarySearch must be set to true when the Set method on a Store returns an error if the
 	// No-Vary-Search header is invalid.
 	ValidatesNoVarySearch bool
@@ -189,6 +192,28 @@ func (d doInvalidate) do(tb testing.TB, s httpcache.Store) {
 	gotErr := s.Invalidate(tb.Context(), *url_)
 	if !errors.Is(d.want.err, gotErr) {
 		tb.Errorf("Invalidate() err mismatch: got %v, want %v", gotErr, d.want.err)
+	}
+}
+
+type doInvalidateGroups struct {
+	args doInvalidateGroupsArgs
+	want doInvalidateGroupsWant
+}
+
+var _ storeOperation = doInvalidateGroups{}
+
+type doInvalidateGroupsArgs struct {
+	groups []string
+}
+
+type doInvalidateGroupsWant struct {
+	err error
+}
+
+func (d doInvalidateGroups) do(tb testing.TB, s httpcache.Store) {
+	gotErr := s.InvalidateGroups(tb.Context(), d.args.groups...)
+	if !errors.Is(d.want.err, gotErr) {
+		tb.Errorf("InvalidateGroups() err mismatch: got %v, want %v", gotErr, d.want.err)
 	}
 }
 
@@ -1455,6 +1480,127 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withRespBody(`response body`))),
 					},
 					timeOffset: -sleep,
+				},
+			},
+		})
+	}
+
+	if cfg.SupportsCacheGroups {
+		tests = append(tests, testCase{
+			name: "set multiple with cache groups + invalidate some groups + hits and misses",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-a"`),
+							withRespBody(`response body`)),
+					},
+				},
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a-b")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-a", "group-b"`),
+							withRespBody(`response body`)),
+					},
+				},
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/b-c")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-b", "group-c"`),
+							withRespBody(`response body`)),
+					},
+				},
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/c-d")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-c", "group-d"`),
+							withRespBody(`response body`)),
+					},
+				},
+				doInvalidateGroups{
+					args: doInvalidateGroupsArgs{
+						groups: []string{"group-a", "group-b"},
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a")),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a-b")),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/b-c")),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/c-d")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-c", "group-d"`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
+		})
+
+		tests = append(tests, testCase{
+			name: "set with invalid cache groups + hits",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-a" "group-b"`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/a")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Cache-Groups", `"group-a" "group-b"`),
+							withRespBody(`response body`))),
+					},
 				},
 			},
 		})

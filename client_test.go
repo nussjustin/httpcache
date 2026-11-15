@@ -44,11 +44,12 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type testStore struct {
-	httpcache.Store
-	failOnGet   bool
-	failOnStore bool
-	invalidated []string
-	stored      int
+	wrapped           httpcache.Store
+	failOnGet         bool
+	failOnStore       bool
+	invalidated       []string
+	invalidatedGroups []string
+	stored            int
 }
 
 var errStoreFail = errors.New("fail on store")
@@ -57,7 +58,7 @@ func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *h
 	if t.failOnGet {
 		return nil, "fail-on-get", errStoreFail
 	}
-	resp, _, err = t.Store.Get(ctx, req)
+	resp, _, err = t.wrapped.Get(ctx, req)
 	if resp != nil {
 		detail = "hit"
 	} else {
@@ -70,7 +71,12 @@ func (t *testStore) Invalidate(ctx context.Context, urls ...url.URL) error {
 	for _, u := range urls {
 		t.invalidated = append(t.invalidated, u.String())
 	}
-	return t.Store.Invalidate(ctx, urls...)
+	return t.wrapped.Invalidate(ctx, urls...)
+}
+
+func (t *testStore) InvalidateGroups(ctx context.Context, groups ...string) error {
+	t.invalidatedGroups = append(t.invalidatedGroups, groups...)
+	return t.wrapped.InvalidateGroups(ctx, groups...)
 }
 
 func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
@@ -78,7 +84,7 @@ func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp htt
 		return "fail-on-store", errStoreFail
 	}
 	t.stored++
-	return t.Store.Set(ctx, req, resp)
+	return t.wrapped.Set(ctx, req, resp)
 }
 
 type reqOpt func(*http.Request)
@@ -184,17 +190,18 @@ func TestClient_Do(t *testing.T) {
 
 func testClientDo(t *testing.T, withCacheStatus bool) {
 	type transaction struct {
-		req             *http.Request
-		resp            *http.Response
-		respErr         error
-		failOnGet       bool
-		failOnStore     bool
-		wantCacheStatus httpcache.Status
-		wantInvalidated []string
-		wantStored      int
-		wantReq         *http.Request
-		wantResp        *http.Response
-		wantRespErr     bool
+		req                   *http.Request
+		resp                  *http.Response
+		respErr               error
+		failOnGet             bool
+		failOnStore           bool
+		wantCacheStatus       httpcache.Status
+		wantInvalidated       []string
+		wantInvalidatedGroups []string
+		wantStored            int
+		wantReq               *http.Request
+		wantResp              *http.Response
+		wantRespErr           bool
 	}
 
 	tests := []struct {
@@ -1215,6 +1222,97 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 				},
 			},
 		},
+		{
+			name: "response invalidated for cache groups",
+			txs: []transaction{
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"group-a";parameter=ignored, "group-b"`)),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated:       []string{"http://example.com/"},
+					wantInvalidatedGroups: []string{"group-a", "group-b"},
+					wantReq:               newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"group-a";parameter=ignored, "group-b"`),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "response invalidated for cache groups and custom unsafe method",
+			config: httpcache.Config{IsSafeMethodFunc: func(string) bool {
+				return false
+			}},
+			txs: []transaction{
+				{
+					req: newReq(),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"group-a", "group-b"`)),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantInvalidated:       []string{"http://example.com/"},
+					wantInvalidatedGroups: []string{"group-a", "group-b"},
+					wantStored:            1,
+					wantReq:               newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"group-a", "group-b"`),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "response not invalidated for invalid cache group header",
+			txs: []transaction{
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `("list")`)),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{"http://example.com/"},
+					wantReq:         newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `("list")`),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "response not invalidated for invalid cache groups",
+			txs: []transaction{
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"valid-1", invalid, "valid-2"`)),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{"http://example.com/"},
+					wantReq:         newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Cache-Group-Invalidation", `"valid-1", invalid, "valid-2"`),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1230,7 +1328,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					}
 
 					store := &testStore{
-						Store:       &sharedStore,
+						wrapped:     &sharedStore,
 						failOnGet:   tx.failOnGet,
 						failOnStore: tx.failOnStore,
 					}
@@ -1370,6 +1468,64 @@ func TestResponseData_Age(t *testing.T) {
 
 				if got := resp.Age(); got != tt.want {
 					t.Errorf("ResponseData.Age() = %s, want %s", got, tt.want)
+				}
+			})
+		})
+	}
+}
+
+func TestResponseData_CacheGroups(t *testing.T) {
+	tests := []struct {
+		name    string
+		resp    httpcache.ResponseData
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "no Cache-Groups header",
+			resp: httpcache.ResponseData{},
+		},
+		{
+			name: "single Cache-Groups header",
+			resp: httpcache.ResponseData{Header: http.Header{
+				"Cache-Groups": []string{`"group-a", "group-b", "group-c", "group-b"`},
+			}},
+			want: []string{"group-a", "group-b", "group-c", "group-b"},
+		},
+		{
+			name: "multiple Cache-Groups headers",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Cache-Groups": []string{
+						`"group-a", "group-b", "group-c", "group-b"`,
+						`"group-c"`,
+						`"group-a", "group-d"`,
+					},
+				},
+			},
+			want: []string{"group-a", "group-b", "group-c", "group-b", "group-c", "group-a", "group-d"},
+		},
+		{
+			name: "parameters are ignored",
+			resp: httpcache.ResponseData{Header: http.Header{
+				"Cache-Groups": []string{`"group-a";parameter=value, "group-b"`},
+			}},
+			want: []string{"group-a", "group-b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				got, gotErr := tt.resp.CacheGroups()
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("ResponseData.CacheGroups() = %v, want %v", got, tt.want)
+				}
+
+				if gotErr != nil && !tt.wantErr {
+					t.Errorf("ResponseData.CacheGroups() err = %v, want nil", gotErr)
+				} else if gotErr == nil && tt.wantErr {
+					t.Error("ResponseData.CacheGroups() err = nil, want non-nil")
 				}
 			})
 		})

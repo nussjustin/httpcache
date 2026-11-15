@@ -1,8 +1,13 @@
 # httpcache [![Go Reference](https://pkg.go.dev/badge/github.com/nussjustin/httpcache.svg)](https://pkg.go.dev/github.com/nussjustin/httpcache) [![Lint](https://github.com/nussjustin/httpcache/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/nussjustin/httpcache/actions/workflows/golangci-lint.yml) [![Test](https://github.com/nussjustin/httpcache/actions/workflows/test.yml/badge.svg)](https://github.com/nussjustin/httpcache/actions/workflows/test.yml)
 
-Package httpcache implements functions related to HTTP caching based on RFC 9111 including targeted Cache-Control
-headers as specified in RFC 9213, the Cache-Status header specified in RFC 9211 and the No-Vary-Search header specified
-in [this](https://github.com/httpwg/http-extensions/blob/14b1143b9fe8cb4ff31257aaf44fc8dcb2314bed/draft-ietf-httpbis-no-vary-search.md) IETF HTTP Working Group draft.
+Package httpcache implements functions related to HTTP caching based on RFC 9111.
+
+It also implements
+
+* Targeted Cache-Control headers (RFC 9213),
+* The Cache-Groups and Cache-Group-Invalidation headers (RFC 9875),
+* The Cache-Status header (RFC 9211) and
+* The No-Vary-Search header ([IETF HTTP Working Group draft](https://github.com/httpwg/http-extensions/blob/14b1143b9fe8cb4ff31257aaf44fc8dcb2314bed/draft-ietf-httpbis-no-vary-search.md)
 
 ## Examples
 

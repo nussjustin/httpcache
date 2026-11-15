@@ -70,6 +70,7 @@ func NewMemoryStore(opts MemoryStoreOpts) *MemoryStore {
 
 type memoryStoreEntry struct {
 	origin             httpcacheutil.Origin
+	groups             map[string]struct{}
 	req                httpcache.RequestData
 	resp               httpcache.ResponseData
 	urlVariationConfig httpcache.URLVariationConfig
@@ -234,6 +235,31 @@ func (m *MemoryStore) invalidateOneLocked(url_ url.URL) {
 	})
 }
 
+// InvalidateGroups implements the [github.com/nussjustin/httpcache.Store.InvalidateGroups] method.
+func (m *MemoryStore) InvalidateGroups(_ context.Context, groups ...string) error {
+	m.entriesMu.Lock()
+	defer m.entriesMu.Unlock()
+
+	for _, group := range groups {
+		m.invalidateOneGroupLocked(group)
+	}
+
+	return nil
+}
+
+func (m *MemoryStore) invalidateOneGroupLocked(group string) {
+	for key, entries := range m.entries {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+			_, ok := entry.groups[group]
+			return ok
+		})
+	}
+
+	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+		return len(entries) == 0
+	})
+}
+
 // Prune removes all expired responses from the store.
 func (m *MemoryStore) Prune() {
 	m.entriesMu.Lock()
@@ -265,12 +291,24 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 		return m.detail("invalid No-Vary-Search"), err
 	}
 
+	groups, _ := resp.CacheGroups()
+
+	var groupsMap map[string]struct{}
+
+	if len(groups) > 0 {
+		groupsMap = make(map[string]struct{}, len(groups))
+		for _, group := range groups {
+			groupsMap[group] = struct{}{}
+		}
+	}
+
 	key := m.key(req)
 
 	origin, _ := httpcacheutil.OriginFromURL(req.URL)
 
 	entry := &memoryStoreEntry{
 		origin:             origin,
+		groups:             groupsMap,
 		req:                req,
 		resp:               resp,
 		urlVariationConfig: urlVariationConfig,

@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nussjustin/httpsfv"
 
 	"github.com/nussjustin/httpcache/httpcacheutil"
 )
@@ -69,6 +72,7 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 		}
 
 		_ = c.invalidate(req, resp)
+		_ = c.invalidateGroups(req, resp)
 	}()
 
 	client := c.HTTPClient
@@ -283,6 +287,47 @@ func (c *Client) invalidate(req *http.Request, resp *http.Response) error {
 	return c.Store.Invalidate(req.Context(), urls...)
 }
 
+func (c *Client) invalidateGroups(req *http.Request, resp *http.Response) error {
+	if c.Config.IsSafeMethod(req.Method) {
+		return nil
+	}
+
+	groups, err := parseCacheGroups(resp.Header, "Cache-Group-Invalidation")
+	if len(groups) == 0 || err != nil {
+		return err
+	}
+
+	return c.Store.InvalidateGroups(req.Context(), groups...)
+}
+
+func parseCacheGroups(header http.Header, name string) ([]string, error) {
+	list, err := httpsfv.ParseLines[httpsfv.List](header.Values(name))
+	if err != nil {
+		return nil, err
+	}
+
+	var groups []string
+	if len(list.Members) > 0 {
+		groups = make([]string, 0, len(list.Members))
+	}
+
+	for _, member := range list.Members {
+		if t := member.Type(); t != httpsfv.ItemOrInnerListTypeItem {
+			return nil, fmt.Errorf("invalid member of type %s in %s", t, name)
+		}
+
+		item := member.Item()
+
+		if t := item.Type(); t != httpsfv.BareItemTypeString {
+			return nil, fmt.Errorf("invalid item of type %s in %s", t, name)
+		}
+
+		groups = append(groups, item.String())
+	}
+
+	return groups, nil
+}
+
 // Store defines the interface used by [Client] for storing and retrieving responses.
 //
 // A store must handle storing and retrieving requests based on
@@ -306,11 +351,17 @@ type Store interface {
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
 	Get(ctx context.Context, req RequestData) (resp *ResponseData, detail string, err error)
 
-	// Invalidate is called when one or more URLs must be invalidated as result of a non-error response to an unsafe
+	// Invalidate is called when one or more URLs should be invalidated as result of a non-error response to an unsafe
 	// request.
 	//
 	// [Client] currently ignores the returned error.
 	Invalidate(ctx context.Context, urls ...url.URL) error
+
+	// InvalidateGroups is called when one or more cache groups should be invalidated as result of a non-error response
+	// to an unsafe request.
+	//
+	// [Client] currently ignores the returned error.
+	InvalidateGroups(ctx context.Context, groups ...string) error
 
 	// Set stores the given response in the cache.
 	//
@@ -395,6 +446,13 @@ func (s *ResponseData) Age() time.Duration {
 	}
 
 	return time.Since(s.Time)
+}
+
+// CacheGroups returns the cache groups specified in the Cache-Groups header as specified in RFC 9875.
+//
+// The groups are returned as specified including duplicates.
+func (s *ResponseData) CacheGroups() ([]string, error) {
+	return parseCacheGroups(s.Header, "Cache-Groups")
 }
 
 // Date returns the parsed Date header.
