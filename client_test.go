@@ -66,9 +66,11 @@ func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *h
 	return
 }
 
-func (t *testStore) Invalidate(ctx context.Context, url_ url.URL) error {
-	t.invalidated = append(t.invalidated, url_.String())
-	return t.Store.Invalidate(ctx, url_)
+func (t *testStore) Invalidate(ctx context.Context, urls ...url.URL) error {
+	for _, u := range urls {
+		t.invalidated = append(t.invalidated, u.String())
+	}
+	return t.Store.Invalidate(ctx, urls...)
 }
 
 func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {

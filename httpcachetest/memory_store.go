@@ -199,13 +199,21 @@ func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 }
 
 // Invalidate implements the [github.com/nussjustin/httpcache.Store.Invalidate] method.
-func (m *MemoryStore) Invalidate(_ context.Context, url_ url.URL) error {
+func (m *MemoryStore) Invalidate(_ context.Context, urls ...url.URL) error {
+	m.entriesMu.Lock()
+	defer m.entriesMu.Unlock()
+
+	for _, url_ := range urls {
+		m.invalidateOneLocked(url_)
+	}
+
+	return nil
+}
+
+func (m *MemoryStore) invalidateOneLocked(url_ url.URL) {
 	origin := httpcacheutil.MustOriginFromURL(url_)
 
 	escapedPath := url_.EscapedPath()
-
-	m.entriesMu.Lock()
-	defer m.entriesMu.Unlock()
 
 	for key, entries := range m.entries {
 		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
@@ -224,8 +232,6 @@ func (m *MemoryStore) Invalidate(_ context.Context, url_ url.URL) error {
 	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
 		return len(entries) == 0
 	})
-
-	return nil
 }
 
 // Prune removes all expired responses from the store.

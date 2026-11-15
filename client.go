@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -253,21 +252,13 @@ func (c *Client) invalidate(req *http.Request, resp *http.Response) error {
 		return nil
 	}
 
-	ctx := req.Context()
-
-	var errs []error
-
-	if err := c.Store.Invalidate(ctx, *req.URL); err != nil {
-		errs = append(errs, err)
-	}
-
-	origin, err := httpcacheutil.OriginFromURL(*req.URL)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
-	}
-
 	contentLocations := resp.Header.Values("Content-Location")
 	locations := resp.Header.Values("Location")
+
+	urls := make([]url.URL, 1, 1+len(contentLocations)+len(locations))
+	urls[0] = *req.URL
+
+	origin := httpcacheutil.MustOriginFromURL(*req.URL)
 
 	for _, locs := range [2][]string{contentLocations, locations} {
 		for _, loc := range locs {
@@ -285,13 +276,11 @@ func (c *Client) invalidate(req *http.Request, resp *http.Response) error {
 				continue
 			}
 
-			if err := c.Store.Invalidate(ctx, *locURL); err != nil {
-				errs = append(errs, err)
-			}
+			urls = append(urls, *locURL)
 		}
 	}
 
-	return errors.Join(errs...)
+	return c.Store.Invalidate(req.Context(), urls...)
 }
 
 // Store defines the interface used by [Client] for storing and retrieving responses.
@@ -317,10 +306,11 @@ type Store interface {
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
 	Get(ctx context.Context, req RequestData) (resp *ResponseData, detail string, err error)
 
-	// Invalidate is called when an URL must be invalidated as result of a non-error response to an unsafe request.
+	// Invalidate is called when one or more URLs must be invalidated as result of a non-error response to an unsafe
+	// request.
 	//
-	// [Client] currently ignored the returned error.
-	Invalidate(ctx context.Context, url_ url.URL) error
+	// [Client] currently ignores the returned error.
+	Invalidate(ctx context.Context, urls ...url.URL) error
 
 	// Set stores the given response in the cache.
 	//
