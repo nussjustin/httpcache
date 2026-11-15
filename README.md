@@ -2,7 +2,7 @@
 
 Package httpcache implements functions related to HTTP caching based on RFC 9111 including targeted Cache-Control
 headers as specified in RFC 9213, the Cache-Status header specified in RFC 9211 and the No-Vary-Search header specified
-in draft-ietf-httpbis-no-vary-search-10.
+in [this](https://github.com/httpwg/http-extensions/blob/14b1143b9fe8cb4ff31257aaf44fc8dcb2314bed/draft-ietf-httpbis-no-vary-search.md) IETF HTTP Working Group draft.
 
 ## Examples
 
