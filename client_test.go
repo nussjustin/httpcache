@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/maphash"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -50,7 +51,13 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type memoryStore struct {
 	entriesMu sync.Mutex
-	entries   map[string]httpcache.ResponseData
+	entries   map[string]*memoryStoreEntry
+}
+
+type memoryStoreEntry struct {
+	origin httpcacheutil.Origin
+	req    httpcache.RequestData
+	resp   httpcache.ResponseData
 }
 
 var _ httpcache.Store = (*memoryStore)(nil)
@@ -80,25 +87,50 @@ func (t *memoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 	t.entriesMu.Lock()
 	defer t.entriesMu.Unlock()
 
-	respVal, ok := t.entries[key]
+	e, ok := t.entries[key]
 	if !ok {
 		return nil, "memory:miss", nil
 	}
 
-	return new(respVal), "memory:hit", nil
+	return new(e.resp), "memory:hit", nil
+}
+
+func (t *memoryStore) Invalidate(_ context.Context, url_ url.URL) error {
+	origin := httpcacheutil.MustOriginFromURL(url_)
+
+	escapedPath := url_.EscapedPath()
+
+	t.entriesMu.Lock()
+	defer t.entriesMu.Unlock()
+
+	maps.DeleteFunc(t.entries, func(_ string, entry *memoryStoreEntry) bool {
+		if !origin.Same(entry.origin) {
+			return false
+		}
+
+		if entry.req.URL.EscapedPath() != escapedPath {
+			return false
+		}
+
+		return true
+	})
+
+	return nil
 }
 
 func (t *memoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
 	key := t.key(req)
 
+	origin, _ := httpcacheutil.OriginFromURL(req.URL)
+
 	t.entriesMu.Lock()
 	defer t.entriesMu.Unlock()
 
 	if t.entries == nil {
-		t.entries = make(map[string]httpcache.ResponseData)
+		t.entries = make(map[string]*memoryStoreEntry)
 	}
 
-	t.entries[key] = resp
+	t.entries[key] = &memoryStoreEntry{origin: origin, req: req, resp: resp}
 
 	return "", nil
 }
@@ -107,6 +139,7 @@ type testStore struct {
 	httpcache.Store
 	failOnGet   bool
 	failOnStore bool
+	invalidated []string
 	stored      int
 }
 
@@ -117,6 +150,11 @@ func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *h
 		return nil, "fail-on-get", errStoreFail
 	}
 	return t.Store.Get(ctx, req)
+}
+
+func (t *testStore) Invalidate(ctx context.Context, url_ url.URL) error {
+	t.invalidated = append(t.invalidated, url_.String())
+	return t.Store.Invalidate(ctx, url_)
 }
 
 func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
@@ -236,6 +274,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 		failOnGet       bool
 		failOnStore     bool
 		wantCacheStatus httpcache.Status
+		wantInvalidated []string
 		wantStored      int
 		wantReq         *http.Request
 		wantResp        *http.Response
@@ -796,6 +835,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req:             newReq(withReqMethod("POST")),
 					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120")),
 					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMethod},
+					wantInvalidated: []string{"http://example.com/"},
 					wantStored:      0,
 					wantReq:         newReq(withReqMethod("POST")),
 					wantResp: newResp(
@@ -814,6 +854,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req:             newReq(withReqMethod("POST")),
 					resp:            newResp(withRespHeader("Cache-Control", "public, max-age=120")),
 					wantCacheStatus: httpcache.Status{Cache: "my-cache", Forwarded: httpcache.ForwardedReasonMiss, Stored: true},
+					wantInvalidated: []string{"http://example.com/"},
 					wantStored:      1,
 					wantReq:         newReq(withReqMethod("POST")),
 					wantResp: newResp(
@@ -982,6 +1023,282 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 				},
 			},
 		},
+		{
+			name: "response invalidated",
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req:  newReq(withReqMethod("POST")),
+					resp: newResp(),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{"http://example.com/"},
+					wantReq:         newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "2")),
+				},
+			},
+		},
+		{
+			name: "response invalidated for custom unsafe method",
+			config: httpcache.Config{IsSafeMethodFunc: func(string) bool {
+				return false
+			}},
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantInvalidated: []string{"http://example.com/"},
+					wantStored:      1,
+					wantReq:         newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "response invalidated with content-location and location",
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Content-Location", "http://example.com/content-location-1"),
+						withRespHeader("Content-Location", "http://example.com/content-location-2"),
+						withRespHeader("Location", "http://example.com/location-1"),
+						withRespHeader("Location", "http://example.com/location-2")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{
+						"http://example.com/",
+						"http://example.com/content-location-1",
+						"http://example.com/content-location-2",
+						"http://example.com/location-1",
+						"http://example.com/location-2",
+					},
+					wantReq: newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Content-Location", "http://example.com/content-location-1"),
+						withRespHeader("Content-Location", "http://example.com/content-location-2"),
+						withRespHeader("Location", "http://example.com/location-1"),
+						withRespHeader("Location", "http://example.com/location-2"),
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "2")),
+				},
+			},
+		},
+		{
+			name: "response invalidation skips invalid content-location and location",
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Content-Location", "invalid\x00"),
+						withRespHeader("Content-Location", "http://example.com/content-location-2"),
+						withRespHeader("Content-Location", "http://example.com:99999/content-location-3"),
+						withRespHeader("Location", "invalid\x00"),
+						withRespHeader("Location", "http://example.com/location-2"),
+						withRespHeader("Location", "http://example.com:99999/location-2")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{
+						"http://example.com/",
+						"http://example.com/content-location-2",
+						"http://example.com/location-2",
+					},
+					wantReq: newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Content-Location", "invalid\x00"),
+						withRespHeader("Content-Location", "http://example.com/content-location-2"),
+						withRespHeader("Content-Location", "http://example.com:99999/content-location-3"),
+						withRespHeader("Location", "invalid\x00"),
+						withRespHeader("Location", "http://example.com/location-2"),
+						withRespHeader("Location", "http://example.com:99999/location-2"),
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "2")),
+				},
+			},
+		},
+		{
+			name: "response invalidation ignores content-location and location with other origins",
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespHeader("Content-Location", "http://example.org/content-location-1"),
+						withRespHeader("Location", "https://example.com/location-1"),
+						withRespHeader("Location", "http://example.com:80/location-2"),
+						withRespHeader("Location", "http://example.com:1080/location-2")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantInvalidated: []string{
+						"http://example.com/",
+						"http://example.com:80/location-2",
+					},
+					wantReq: newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespHeader("Content-Location", "http://example.org/content-location-1"),
+						withRespHeader("Location", "https://example.com/location-1"),
+						withRespHeader("Location", "http://example.com:80/location-2"),
+						withRespHeader("Location", "http://example.com:1080/location-2"),
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "2")),
+				},
+			},
+		},
+		{
+			name: "response not invalidated on error",
+			txs: []transaction{
+				{
+					req:  newReq(),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(withReqMethod("POST")),
+					resp: newResp(
+						withRespStatus(http.StatusNotFound)),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMethod,
+					},
+					wantReq: newReq(withReqMethod("POST")),
+					wantResp: newResp(
+						withRespStatus(http.StatusNotFound),
+						withRespHeader("Transaction-Id", "1")),
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1054,6 +1371,10 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 
 						if got, want := resp.Header, wantRespHeader; want != nil && !headerEqual(got, want) {
 							t.Errorf("Tx %d: Do() Response.Header = %#v, want %#v", i, got, want)
+						}
+
+						if got, want := store.invalidated, tx.wantInvalidated; !slices.Equal(got, want) {
+							t.Errorf("Tx %d: Do() got Store.Invalidate calls = %v, want %v", i, got, want)
 						}
 
 						if got, want := store.stored, tx.wantStored; got != want {

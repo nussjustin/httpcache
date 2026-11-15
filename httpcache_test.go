@@ -616,6 +616,87 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 	}
 }
 
+func TestConfig_IsSafeMethod(t *testing.T) {
+	tests := []struct {
+		name   string
+		config httpcache.Config
+		method string
+		want   bool
+	}{
+		{
+			name:   "default logic, GET",
+			method: "GET",
+			want:   true,
+		},
+		{
+			name:   "default logic, HEAD",
+			method: "HEAD",
+			want:   true,
+		},
+		{
+			name:   "default logic, OPTIONS",
+			method: "OPTIONS",
+			want:   true,
+		},
+		{
+			name:   "default logic, POST",
+			method: "POST",
+		},
+		{
+			name:   "default logic, PUT",
+			method: "PUT",
+		},
+		{
+			name:   "default logic, QUERY",
+			method: "QUERY",
+			want:   true,
+		},
+		{
+			name:   "default logic, SEARCH",
+			method: "SEARCH",
+		},
+		{
+			name:   "default logic, TRACE",
+			method: "TRACE",
+			want:   true,
+		},
+		{
+			name:   "default logic, lowercase GET",
+			method: "get",
+			want:   true,
+		},
+		{
+			name:   "default logic, lowercase POST",
+			method: "post",
+		},
+		{
+			name: "custom logic, unsafe GET",
+			config: httpcache.Config{IsSafeMethodFunc: func(method string) bool {
+				return method != "GET"
+			}},
+			method: "GET",
+		},
+		{
+			name: "custom logic, safe POST",
+			config: httpcache.Config{IsSafeMethodFunc: func(method string) bool {
+				return method == "POST"
+			}},
+			method: "POST",
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.IsSafeMethod(tt.method)
+
+			if got != tt.want {
+				t.Errorf("Config.IsSafeMethod() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfig_ParseRequestDirectives(t *testing.T) {
 	tests := []struct {
 		name    string

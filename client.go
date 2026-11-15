@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
 // Client wraps an existing [*net/http.Client] (or [http.DefaultClient]) adding caching of responses using a
@@ -60,13 +63,20 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
+func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err error) {
+	defer func() {
+		if resp == nil || err != nil {
+			return
+		}
+
+		_ = c.invalidate(req, resp)
+	}()
+
 	client := c.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	var status Status
 	if c.Config.Name != "" {
 		status.Cache = c.Config.Name
 	} else {
@@ -74,13 +84,13 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	}
 
 	if !c.Config.isSupportedRequestMethod(req.Method) {
-		resp, err := client.Do(req)
+		resp, err = client.Do(req)
 		status.Forwarded = ForwardedReasonMethod
 		return resp, status, err
 	}
 
 	if len(req.Header["Expect"]) != 0 {
-		resp, err := client.Do(req)
+		resp, err = client.Do(req)
 		status.Forwarded = ForwardedReasonRequest
 		return resp, status, err
 	}
@@ -188,7 +198,7 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	}
 
 	//goland:noinspection GoResourceLeak
-	resp, err := client.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
 		return nil, Status{}, err
 	}
@@ -218,6 +228,72 @@ func (c *Client) do(req *http.Request) (*http.Response, Status, error) {
 	return resp, status, nil
 }
 
+func (c *Client) invalidate(req *http.Request, resp *http.Response) error {
+	// 4.4 Invalidating Stored Responses
+	//
+	// A cache MUST invalidate the target URI (Section 7.1 of [HTTP]) when it receives a non-error status code in
+	// response to an unsafe request method (including methods whose safety is unknown).
+	//
+	// A cache MAY invalidate other URIs when it receives a non-error status code in response to an unsafe request
+	// method (including methods whose safety is unknown). In particular, the URI(s) in the Location and
+	// Content-Location response header fields (if present) are candidates for invalidation; other URIs might be
+	// discovered through mechanisms not specified in this document. However, a cache MUST NOT trigger an invalidation
+	// under these conditions if the origin (Section 4.3.1 of [HTTP]) of the URI to be invalidated differs from that of
+	// the target URI (Section 7.1 of [HTTP]). This helps prevent denial-of-service attacks.
+	//
+	// https://www.rfc-editor.org/rfc/rfc9111.html#name-invalidating-stored-respons
+
+	if c.Config.IsSafeMethod(req.Method) {
+		return nil
+	}
+
+	nonErrorResponse := resp.StatusCode >= 200 && resp.StatusCode <= 399
+
+	if !nonErrorResponse {
+		return nil
+	}
+
+	ctx := req.Context()
+
+	var errs []error
+
+	if err := c.Store.Invalidate(ctx, *req.URL); err != nil {
+		errs = append(errs, err)
+	}
+
+	origin, err := httpcacheutil.OriginFromURL(*req.URL)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+
+	contentLocations := resp.Header.Values("Content-Location")
+	locations := resp.Header.Values("Location")
+
+	for _, locs := range [2][]string{contentLocations, locations} {
+		for _, loc := range locs {
+			locURL, err := url.Parse(loc)
+			if err != nil {
+				continue
+			}
+
+			locOrigin, err := httpcacheutil.OriginFromURL(*locURL)
+			if err != nil {
+				continue
+			}
+
+			if !locOrigin.Same(origin) {
+				continue
+			}
+
+			if err := c.Store.Invalidate(ctx, *locURL); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
 // Store defines the interface used by [Client] for storing and retrieving responses.
 //
 // A store must handle storing and retrieving requests based on
@@ -241,6 +317,11 @@ type Store interface {
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
 	Get(ctx context.Context, req RequestData) (resp *ResponseData, detail string, err error)
 
+	// Invalidate is called when an URL must be invalidated as result of a non-error response to an unsafe request.
+	//
+	// [Client] currently ignored the returned error.
+	Invalidate(ctx context.Context, url_ url.URL) error
+
 	// Set stores the given response in the cache.
 	//
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
@@ -263,7 +344,7 @@ type RequestData struct {
 	// Certain headers may have been removed, e.g. authorization related headers.
 	Header http.Header
 
-	// Body contains the raw request body bytes or nil if the request did not sent a body.
+	// Body contains the raw request body bytes or nil if the request did not send a body.
 	Body []byte
 
 	// ParsedDirectives contains the parsed Cache-Control directives.

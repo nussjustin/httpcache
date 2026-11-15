@@ -193,7 +193,7 @@ func TestParse(t *testing.T) {
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Parse() mismatch (-want +git):\n%s", diff)
+				t.Errorf("Parse() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -417,7 +417,7 @@ func TestParseStructured(t *testing.T) {
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("ParseStructured() mismatch (-want +git):\n%s", diff)
+				t.Errorf("ParseStructured() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -673,7 +673,7 @@ func TestTokenize(t *testing.T) {
 			got := slices.Collect(cachecontrol.Tokenize(tt.in))
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Tokenize() mismatch (-want +git):\n%s", diff)
+				t.Errorf("Tokenize() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

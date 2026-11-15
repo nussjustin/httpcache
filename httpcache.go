@@ -86,6 +86,12 @@ type Config struct {
 	// Other responses are not required to be understood.
 	UnderstoodResponseCodes []int
 
+	// IsSafeMethodFunc is an optional function that when set is used by [Config.IsSafeMethod] to check if a method
+	// is safe.
+	//
+	// The method is guaranteed to be in all uppercase.
+	IsSafeMethodFunc func(method string) bool
+
 	// TargetList, if not empty, contains alternative headers that a [Client] will check in favor of Cache-Control, as
 	// specified in RFC 9213.
 	TargetList []string
@@ -247,6 +253,28 @@ func (c Config) isSupportedRequestMethod(method string) bool {
 
 func (c Config) isUnderstoodResponseCode(code int) bool {
 	return slices.Contains(c.UnderstoodResponseCodes, code)
+}
+
+// IsSafeMethod returns true if the given method is considered safe.
+//
+// By default, only GET, HEAD, OPTIONS, QUERY and TRACE are considered unsafe.
+//
+// If [Config.IsSafeMethodFunc] is not nil, it will be called instead and the result returned.
+//
+// The method will be normalized to uppercase in any case.
+func (c Config) IsSafeMethod(method string) bool {
+	method = strings.ToUpper(method)
+
+	if c.IsSafeMethodFunc != nil {
+		return c.IsSafeMethodFunc(method)
+	}
+
+	switch method {
+	case "GET", "HEAD", "OPTIONS", "QUERY", "TRACE":
+		return true
+	default:
+		return false
+	}
 }
 
 // RemoveUnstorableHeaders removes response headers that must not be stored.

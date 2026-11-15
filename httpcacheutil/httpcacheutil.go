@@ -1,8 +1,10 @@
 package httpcacheutil
 
 import (
+	"fmt"
 	"hash"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -33,7 +35,13 @@ func HashRequest(h hash.Hash, method string, url_ url.URL, body []byte) (n int, 
 	b = append(b, 0)
 	b = append(b, url_.Opaque...)
 	b = append(b, 0)
-	b = append(b, url_.Host...)
+	b = append(b, url_.Hostname()...)
+	b = append(b, 0)
+	if p := url_.Port(); p != "" {
+		b = append(b, url_.Port()...)
+	} else {
+		b = strconv.AppendUint(b, uint64(defaultPort[strings.ToLower(url_.Scheme)]), 10)
+	}
 	b = append(b, 0)
 	b = append(b, url_.EscapedPath()...)
 
@@ -56,4 +64,63 @@ func HashRequest(h hash.Hash, method string, url_ url.URL, body []byte) (n int, 
 	}
 
 	return n1 + n2, nil
+}
+
+// Origin represents an Origin as defined in RFC 9110, Section 4.3.1 URI Origin.
+type Origin struct {
+	_ [0]func()
+
+	// Scheme contains the lower-cased scheme, e.g. "https".
+	Scheme string
+
+	// Host contains the host name without any normalization.
+	Host string
+
+	// Port contains the port.
+	Port uint16
+}
+
+var defaultPort = map[string]uint16{
+	"ftp":   21,
+	"http":  80,
+	"https": 443,
+	"sftp":  22,
+	"ssh":   22,
+}
+
+// OriginFromURL returns the origin for the given URL.
+//
+// The scheme and port will be normalized as required by RFC 9110 and a missing port will use the default for the
+// scheme, if known.
+func OriginFromURL(u url.URL) (Origin, error) {
+	scheme := strings.ToLower(u.Scheme)
+
+	port := defaultPort[scheme]
+	if portStr := u.Port(); portStr != "" {
+		parsed, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return Origin{}, fmt.Errorf("failed to parse port: %w", err)
+		}
+		port = uint16(parsed)
+	}
+
+	return Origin{
+		Scheme: scheme,
+		Host:   u.Hostname(),
+		Port:   port,
+	}, nil
+}
+
+// MustOriginFromURL is like [OriginFromURL], but panics on error.
+func MustOriginFromURL(u url.URL) Origin {
+	o, err := OriginFromURL(u)
+	if err != nil {
+		panic(fmt.Errorf("failed to get origin from url.URL: %w", err))
+	}
+	return o
+}
+
+// Same returns true if other is considered the same origin as o.
+func (o Origin) Same(other Origin) bool {
+	return o.Scheme == other.Scheme && o.Host == other.Host && o.Port == other.Port
 }

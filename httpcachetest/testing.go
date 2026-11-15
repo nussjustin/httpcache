@@ -1,31 +1,17 @@
 package httpcachetest
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
-	"slices"
-	"strconv"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/nussjustin/httpcache"
 )
-
-func headerEqual(a, b http.Header) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	for k := range a {
-		if !slices.Equal(a[k], b[k]) {
-			return false
-		}
-	}
-
-	return true
-}
 
 type reqOpt func(*httpcache.RequestData)
 
@@ -57,8 +43,8 @@ func withReqUrl(urlStr string) reqOpt {
 	}
 }
 
-func newReq(opts ...reqOpt) *httpcache.RequestData {
-	req := &httpcache.RequestData{Header: make(http.Header)}
+func newReq(opts ...reqOpt) httpcache.RequestData {
+	req := httpcache.RequestData{Header: make(http.Header)}
 
 	opts = append(
 		[]reqOpt{
@@ -69,7 +55,7 @@ func newReq(opts ...reqOpt) *httpcache.RequestData {
 	)
 
 	for _, opt := range opts {
-		opt(req)
+		opt(&req)
 	}
 
 	return req
@@ -96,9 +82,8 @@ func withRespStatus(code int) respOpt {
 	}
 }
 
-// bodyclose:handled
-func newResp(opts ...respOpt) *httpcache.ResponseData {
-	resp := &httpcache.ResponseData{Header: make(http.Header), Body: []byte{}}
+func newResp(opts ...respOpt) httpcache.ResponseData {
+	resp := httpcache.ResponseData{Header: make(http.Header), Body: []byte{}}
 
 	opts = append(
 		[]respOpt{
@@ -108,7 +93,7 @@ func newResp(opts ...respOpt) *httpcache.ResponseData {
 	)
 
 	for _, opt := range opts {
-		opt(resp)
+		opt(&resp)
 	}
 
 	return resp
@@ -117,6 +102,10 @@ func newResp(opts ...respOpt) *httpcache.ResponseData {
 // TestStoreOpts can be used to configure what [TestStore] expects for certain test cases that have no strictly defined
 // behavior.
 type TestStoreOpts struct {
+	// DefaultPortMatchesExplicitPort must be set to true for caches that can return a stored response for an URL with
+	// default port (e.g. 443 for HTTPS) for one with an explicit port and vice versa.
+	DefaultPortMatchesExplicitPort bool
+
 	// ReturnsNilForExpired must be set to true if Get returns no response when the response is expired.
 	//
 	// Expiry must be calculated based as defined in RFC 9111, taking into account the response Cache-Control and
@@ -136,461 +125,1439 @@ type TestStoreOpts struct {
 	ValidatesNoVarySearch bool
 }
 
-// TestStore tests that an implementation of [github.com/nussjustin/httpcache.Store].
+type storeOperation interface {
+	do(tb testing.TB, s httpcache.Store)
+}
+
+type doGet struct {
+	args       doGetArgs
+	want       doGetWant
+	timeOffset time.Duration
+}
+
+var _ storeOperation = doGet{}
+
+type doGetArgs struct {
+	req httpcache.RequestData
+}
+
+type doGetWant struct {
+	resp *httpcache.ResponseData
+	err  error
+}
+
+func (d doGet) do(tb testing.TB, s httpcache.Store) {
+	if d.args.req.Time.IsZero() {
+		d.args.req.Time = time.Now().Add(d.timeOffset)
+	}
+
+	if d.want.resp != nil && d.want.resp.Time.IsZero() {
+		d.want.resp.Time = time.Now().Add(d.timeOffset)
+	}
+
+	gotResp, _, gotErr := s.Get(tb.Context(), d.args.req)
+	if diff := cmp.Diff(d.want.resp, gotResp); diff != "" {
+		tb.Errorf("Get() mismatch (-want +got):\n%s", diff)
+	}
+
+	if !errors.Is(d.want.err, gotErr) {
+		tb.Errorf("Get() err mismatch: got %v, want %v", gotErr, d.want.err)
+	}
+}
+
+type doInvalidate struct {
+	args doInvalidateArgs
+	want doInvalidateWant
+}
+
+var _ storeOperation = doInvalidate{}
+
+type doInvalidateArgs struct {
+	url string
+}
+
+type doInvalidateWant struct {
+	err error
+}
+
+func (d doInvalidate) do(tb testing.TB, s httpcache.Store) {
+	url_, err := url.Parse(d.args.url)
+	if err != nil {
+		tb.Fatalf("invalid URL %q: %s", d.args.url, err)
+	}
+
+	gotErr := s.Invalidate(tb.Context(), *url_)
+	if !errors.Is(d.want.err, gotErr) {
+		tb.Errorf("Invalidate() err mismatch: got %v, want %v", gotErr, d.want.err)
+	}
+}
+
+type doSet struct {
+	args doSetArgs
+	want doSetWant
+}
+
+var _ storeOperation = doSet{}
+
+type doSetArgs struct {
+	req  httpcache.RequestData
+	resp httpcache.ResponseData
+}
+
+type doSetWant struct {
+	err bool
+}
+
+func (d doSet) do(tb testing.TB, s httpcache.Store) {
+	if d.args.req.Time.IsZero() {
+		d.args.req.Time = time.Now()
+	}
+
+	if d.args.resp.Time.IsZero() {
+		d.args.resp.Time = time.Now()
+	}
+
+	_, gotErr := s.Set(tb.Context(), d.args.req, d.args.resp)
+	if gotErr != nil && !d.want.err {
+		tb.Errorf("Set() err = %v, want nil", gotErr)
+	} else if gotErr == nil && d.want.err {
+		tb.Errorf("Set() err = nil, want non-nil")
+	}
+}
+
+type doSleep struct {
+	time time.Duration
+}
+
+var _ storeOperation = doSleep{}
+
+func (d doSleep) do(testing.TB, httpcache.Store) {
+	time.Sleep(d.time)
+	synctest.Wait()
+}
+
+// TestStore tests an implementation of [github.com/nussjustin/httpcache.Store] against the expectation set by the
+// interface.
 //
-// The function runs multiple test cases using [testing.T.Run].
+// The function runs multiple test cases using [testing.T.Run] and inside a [testing/synctest] bubble.
 //
 // Each test case calls f once, which must return an empty store.
 func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 	type testCase struct {
-		name          string
-		storedReq     *httpcache.RequestData
-		storedResp    *httpcache.ResponseData
-		lookupReq     *httpcache.RequestData
-		expectedResp  *httpcache.ResponseData
-		wantStoreErr  bool
-		wantLookupErr bool
+		name string
+		ops  []storeOperation
 	}
 
 	tests := []testCase{
 		{
-			name:      "found",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespBody(`hello world`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespBody(`hello world`)),
+			name: "get on empty",
+			ops: []storeOperation{
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for HEAD request",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqMethod("HEAD")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
+			name: "set + hit",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for POST request",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqMethod("POST")),
+			name: "set + hit HEAD request",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("HEAD"),
+							withReqUrl("https://example.com/path")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name: "found with body",
-			storedReq: newReq(
-				withReqMethod("QUERY"),
-				withReqHeader("Content-Type", "application/json"),
-				withReqBody(`{"query": "test"}`)),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(
-				withReqMethod("QUERY"),
-				withReqHeader("Content-Type", "application/json"),
-				withReqBody(`{"query": "test"}`)),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
+			name: "set with explicit port + hit with explicit port",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:1443/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:1443/path")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name: "not found with body mismatch",
-			storedReq: newReq(
-				withReqMethod("QUERY"),
-				withReqHeader("Content-Type", "application/json"),
-				withReqBody(`{"query": "test"}`)),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(
-				withReqMethod("QUERY"),
-				withReqHeader("Content-Type", "application/json"),
-				withReqBody(`{"query": "test1"}`)),
+			name: "set + miss by scheme",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("http://example.com/path")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different scheme",
-			storedReq: newReq(withReqUrl("https://example.com/")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("http://example.org/")),
+			name: "set + miss by host",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.org/path")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different host",
-			storedReq: newReq(withReqUrl("https://example.com/")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.org/")),
+			name: "set + miss by path",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different path",
-			storedReq: newReq(withReqUrl("https://example.com/a")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/b")),
+			name: "set + miss by path with extra trailing /",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path/")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with trailing slash in second request",
-			storedReq: newReq(withReqUrl("https://example.com/path")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path/")),
+			name: "set + miss by path with missing trailing /",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path/")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL without trailing in second request",
-			storedReq: newReq(withReqUrl("https://example.com/path/")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path")),
+			name: "set + miss by query",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?query")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different parameter values",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
+			name: "set + miss by query with changed parameter",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with different parameter values and No-Vary-Search params ignoring the parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("b")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("b")`)),
+			name: "set + hit with changed query parameter and No-Vary-Search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("a")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different parameter values and No-Vary-Search params ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
+			name: "set + miss with changed query parameter and No-Vary-Search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with different parameter values and No-Vary-Search except ignoring the parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
+			name: "set + hit with changed query parameter and No-Vary-Search except",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("b")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different parameter values and No-Vary-Search except ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("b")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=3")),
+			name: "set + miss with changed query parameter and No-Vary-Search except",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with extra parameters",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
+			name: "set + miss by query with added parameter",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with extra parameter and No-Vary-Search params ignoring that parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("c")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("c")`)),
+			name: "set + hit with added query parameter and No-Vary-search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("b")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with extra parameter and No-Vary-Search params ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
+			name: "set + miss with added query parameter and No-Vary-search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with extra parameter and No-Vary-Search except ignoring that parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
+			name: "set + hit with added query parameter and No-Vary-search except",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("a")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with extra parameter and No-Vary-Search except ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("c")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1&b=2&c=3")),
+			name: "set + miss with added query parameter and No-Vary-search except",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with missing parameters",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
+			name: "set + miss by query with removed parameter",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with missing parameter and No-Vary-Search params ignoring that parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("b")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("b")`)),
+			name: "set + hit with removed query parameter and No-Vary-search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("b")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with missing parameter and No-Vary-Search params ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `params=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
+			name: "set + miss with removed query parameter and No-Vary-search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `params=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with missing parameter and No-Vary-Search except ignoring that parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("a")`)),
+			name: "set + hit with removed query parameter and No-Vary-search except",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("a")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("a")`),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with missing parameter and No-Vary-Search except ignoring a different parameter",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `except=("b")`)),
-			lookupReq: newReq(withReqUrl("https://example.com/path?a=1")),
+			name: "set + miss with removed query parameter and No-Vary-search params",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", `except=("b")`),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+				},
+			},
 		},
 		{
-			name:      "not found for URL with different parameter order",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120")),
-			lookupReq: newReq(withReqUrl("https://example.com/path?b=2&a=1")),
+			name: "set + miss by query with changed key-order",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?b=2&a=1")),
+					},
+				},
+			},
 		},
 		{
-			name:      "found for URL with different parameter order and No-Vary-Search with key-order",
-			storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", "key-order")),
-			lookupReq: newReq(withReqUrl("https://example.com/path?b=2&a=1")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", "key-order")),
-		},
-
-		{
-			name: "found for response with Vary header and matching header values",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-			lookupReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Changed value")),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-		},
-		{
-			name: "not found for response with Vary header and non-matching header values",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Changed value"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("Vary", "Header-1, Header-2")),
-			lookupReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
+			name: "set + hit with changed query and No-Vary-search key-order",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1&b=2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", "key-order"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?b=2&a=1")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", "key-order"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
 		},
 		{
-			name: "not found for response with Vary header containing wildcard",
-			storedReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("Vary", "*")),
-			lookupReq: newReq(
-				withReqHeader("Header-1", "Value-1"),
-				withReqHeader("Header-2", "Value-2"),
-				withReqHeader("Header-3", "Value-3")),
+			name: "set with body + hit",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("QUERY"),
+							withReqUrl("https://example.com/path"),
+							withReqBody(`request body`)),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("QUERY"),
+							withReqUrl("https://example.com/path"),
+							withReqBody(`request body`)),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
+		},
+		{
+			name: "set with body + miss by body",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("QUERY"),
+							withReqUrl("https://example.com/path"),
+							withReqBody(`request body`)),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("QUERY"),
+							withReqUrl("https://example.com/path"),
+							withReqBody(`request body 2`)),
+					},
+				},
+			},
+		},
+		{
+			name: "set with Vary + hit",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3"),
+							withReqHeader("Header-4", "Ignored")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, Header-2"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3"),
+							withReqHeader("Header-5", "Ignored")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, Header-2"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
+		},
+		{
+			name: "set with Vary + miss by changed header",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, Header-2"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2+"),
+							withReqHeader("Header-3", "Value-3")),
+					},
+				},
+			},
+		},
+		{
+			name: "set with Vary + miss by changed header with duplicate value",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, Header-2"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3")),
+					},
+				},
+			},
+		},
+		{
+			name: "set with Vary + miss by removed header",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2"),
+							withReqHeader("Header-3", "Value-3")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, Header-2"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-3", "Value-3")),
+					},
+				},
+			},
+		},
+		{
+			name: "set with Vary containing wildcard + miss",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("Vary", "Header-1, *, Header-2"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path"),
+							withReqHeader("Header-1", "Value-1"),
+							withReqHeader("Header-2", "Value-2")),
+					},
+				},
+			},
+		},
+		{
+			name: "set + invalidate + miss",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 1`)),
+					},
+				},
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-2")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 2`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-1")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 1`))),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 2`))),
+					},
+				},
+				doInvalidate{
+					args: doInvalidateArgs{
+						url: "https://example.com/path-1",
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-1")),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path-2")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 2`))),
+					},
+				},
+			},
+		},
+		{
+			name: "set + invalidate with explicit port + miss",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 1`)),
+					},
+				},
+				doInvalidate{
+					args: doInvalidateArgs{
+						url: "https://example.com:443/path",
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+					},
+				},
+			},
+		},
+		{
+			name: "set + invalidate with implicit port + miss",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body 1`)),
+					},
+				},
+				doInvalidate{
+					args: doInvalidateArgs{
+						url: "https://example.com/path",
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+					},
+				},
+			},
+		},
+		{
+			name: "set + sleep + hit fresh",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doSleep{time: 119 * time.Second},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+					timeOffset: -119 * time.Second,
+				},
+			},
 		},
 	}
 
-	if cfg.ReturnsNilForExpiredResponses {
-		nilAfter := int(((60 * time.Second) - cfg.ReturnsNilForExpiredResponsesAfter).Seconds())
+	if cfg.DefaultPortMatchesExplicitPort {
+		tests = append(tests, testCase{
+			name: "set with implicit port + hit with explicit port",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
+			},
+		})
 
-		tests = append(tests, []testCase{
-			{
-				name:      "found response with 1 second left before expiry",
-				storedReq: newReq(),
-				storedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age=61")),
-				lookupReq: newReq(),
-				expectedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age=61")),
+		tests = append(tests, testCase{
+			name: "set with explicit port + hit with implicit port",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+				},
 			},
-			{
-				name:      "not-found response when store TTL is reached",
-				storedReq: newReq(),
-				storedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age="+strconv.Itoa(nilAfter))),
-				lookupReq: newReq(),
-			},
-			{
-				name:      "not-found response a second after store TTL was reached",
-				storedReq: newReq(),
-				storedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age="+strconv.Itoa(nilAfter-1))),
-				lookupReq: newReq(),
-			},
-		}...)
+		})
 	} else {
 		tests = append(tests, testCase{
-			name:      "found expired response",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=5")),
-			lookupReq: newReq(),
-			expectedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=5")),
+			name: "set with implicit port + miss with explicit port",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+					},
+				},
+			},
+		})
+
+		tests = append(tests, testCase{
+			name: "set with explicit port + miss with implicit port",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com:443/path")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path")),
+					},
+				},
+			},
+		})
+	}
+
+	if cfg.ReturnsNilForExpiredResponses {
+		tests = append(tests, testCase{
+			name: "set + sleep + miss expired",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doSleep{time: 120*time.Second + cfg.ReturnsNilForExpiredResponsesAfter},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+					},
+				},
+			},
+		})
+
+		if cfg.ReturnsNilForExpiredResponsesAfter >= 2*time.Second {
+			sleep := 120*time.Second + cfg.ReturnsNilForExpiredResponsesAfter - time.Second
+
+			tests = append(tests, testCase{
+				name: "set + sleep + hit expired that was not yet removed",
+				ops: []storeOperation{
+					doSet{
+						args: doSetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/")),
+							resp: newResp(
+								withRespHeader("Cache-Control", "max-age=120"),
+								withRespBody(`response body`)),
+						},
+					},
+					doSleep{time: sleep},
+					doGet{
+						args: doGetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/")),
+						},
+						want: doGetWant{
+							resp: new(newResp(
+								withRespHeader("Cache-Control", "max-age=120"),
+								withRespBody(`response body`))),
+						},
+						timeOffset: -sleep,
+					},
+				},
+			})
+		}
+	} else {
+		sleep := 120 * time.Second
+
+		tests = append(tests, testCase{
+			name: "set + sleep + hit expired",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`)),
+					},
+				},
+				doSleep{time: sleep},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/")),
+					},
+					want: doGetWant{
+						resp: new(newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespBody(`response body`))),
+					},
+					timeOffset: -sleep,
+				},
+			},
 		})
 	}
 
 	if cfg.ValidatesNoVarySearch {
 		tests = append(tests, testCase{
-			name:      "error returned when storing response with invalid No-Vary-Search",
-			storedReq: newReq(),
-			storedResp: newResp(
-				withRespHeader("Cache-Control", "public, max-age=120"),
-				withRespHeader("No-Vary-Search", `key-order=invalid`)),
-			wantStoreErr: true,
+			name: "set with invalid No-Vary-Search fails + miss",
+			ops: []storeOperation{
+				doSet{
+					args: doSetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+						resp: newResp(
+							withRespHeader("Cache-Control", "max-age=120"),
+							withRespHeader("No-Vary-Search", "key-order=invalid"),
+							withRespBody(`response body`)),
+					},
+					want: doSetWant{
+						err: true,
+					},
+				},
+				doGet{
+					args: doGetArgs{
+						req: newReq(
+							withReqMethod("GET"),
+							withReqUrl("https://example.com/path?a=1")),
+					},
+				},
+			},
 		})
 	} else {
 		tests = append(tests, []testCase{
 			{
-				name:      "found for response with invalid No-Vary-Search",
-				storedReq: newReq(),
-				storedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age=120"),
-					withRespHeader("No-Vary-Search", `key-order=invalid`)),
-				lookupReq: newReq(),
-				expectedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age=120"),
-					withRespHeader("No-Vary-Search", `key-order=invalid`)),
+				name: "set with invalid No-Vary-Search succeeds + hit",
+				ops: []storeOperation{
+					doSet{
+						args: doSetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/path?a=1")),
+							resp: newResp(
+								withRespHeader("Cache-Control", "max-age=120"),
+								withRespHeader("No-Vary-Search", "key-order=invalid"),
+								withRespBody(`response body`)),
+						},
+					},
+					doGet{
+						args: doGetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/path?a=1")),
+						},
+						want: doGetWant{
+							resp: new(newResp(
+								withRespHeader("Cache-Control", "max-age=120"),
+								withRespHeader("No-Vary-Search", "key-order=invalid"),
+								withRespBody(`response body`))),
+						},
+					},
+				},
 			},
 			{
-				name:      "not found for response with invalid No-Vary-Search and different parameter order",
-				storedReq: newReq(withReqUrl("https://example.com/path?a=1&b=2")),
-				storedResp: newResp(
-					withRespHeader("Cache-Control", "public, max-age=120"),
-					withRespHeader("No-Vary-Search", `key-order=invalid`)),
-				lookupReq: newReq(withReqUrl("https://example.com/path?b=2&b=1")),
+				name: "set with invalid No-Vary-Search succeeds + miss with different query",
+				ops: []storeOperation{
+					doSet{
+						args: doSetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/path?a=1&b=2")),
+							resp: newResp(
+								withRespHeader("Cache-Control", "max-age=120"),
+								withRespHeader("No-Vary-Search", "key-order=invalid"),
+								withRespBody(`response body`)),
+						},
+					},
+					doGet{
+						args: doGetArgs{
+							req: newReq(
+								withReqMethod("GET"),
+								withReqUrl("https://example.com/path?b=2&a=1")),
+						},
+					},
+				},
 			},
 		}...)
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.ops) == 0 {
+				t.Fatal("no operations specified")
+			}
+
 			synctest.Test(t, func(t *testing.T) {
 				s := f()
 
-				storedReq := *tt.storedReq
-				storedReq.Time = time.Now()
-
-				storedResp := *tt.storedResp
-				storedResp.Time = time.Now()
-
-				if _, err := s.Set(t.Context(), storedReq, storedResp); err != nil {
-					if tt.wantStoreErr {
-						return
-					}
-					t.Fatalf("Set() error = %v, want nil", err)
-				}
-
-				if tt.wantStoreErr {
-					t.Fatal("Set() error = nil, want non-nil")
-				}
-
-				time.Sleep(time.Minute)
-				synctest.Wait()
-
-				gotResp, _, gotErr := s.Get(t.Context(), *tt.lookupReq)
-
-				switch {
-				case tt.wantLookupErr && gotErr == nil:
-					t.Fatal("Get() error = nil, want error")
-				case !tt.wantLookupErr && gotErr != nil:
-					t.Fatalf("Get() error = %v, want nil", gotErr)
-				}
-
-				switch {
-				case tt.expectedResp == nil && gotResp != nil:
-					t.Fatalf("Get() resp = %s, want nil", formatRespForError(t, gotResp))
-				case tt.expectedResp != nil && gotResp == nil:
-					t.Fatalf("Get() resp = nil, want %s", formatRespForError(t, tt.expectedResp))
-				}
-
-				if tt.expectedResp != nil {
-					if got, want := gotResp.StatusCode, tt.expectedResp.StatusCode; got != want {
-						t.Errorf("Get() Response.StatusCode = %d, want %d", got, want)
-					}
-
-					if got, want := gotResp.Header, tt.expectedResp.Header; want != nil && !headerEqual(got, want) {
-						t.Errorf("Get() Response.Header = %#v, want %#v", got, want)
-					}
+				for i, op := range tt.ops {
+					t.Logf("op %d (%T)", i, op)
+					op.do(t, s)
 				}
 			})
 		})
 	}
-}
-
-func formatRespForError(tb testing.TB, resp *httpcache.ResponseData) string {
-	type respForError struct {
-		Status     string      `json:"Status"`
-		StatusCode int         `json:"StatusCode"`
-		Header     http.Header `json:"Header"`
-		Body       string      `json:"Body,omitempty"`
-		Trailer    http.Header `json:"Trailer,omitempty"`
-	}
-
-	b, err := json.Marshal(respForError{
-		Status:     resp.Status,
-		StatusCode: resp.StatusCode,
-		Header:     resp.Header,
-		Body:       string(resp.Body),
-		Trailer:    resp.Trailer,
-	})
-	if err != nil {
-		tb.Fatalf("failed to marshal response data to JSON: %s", err)
-	}
-
-	return string(b)
 }

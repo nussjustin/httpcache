@@ -8,6 +8,7 @@ import (
 	"hash/maphash"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -68,6 +69,7 @@ func NewMemoryStore(opts MemoryStoreOpts) *MemoryStore {
 }
 
 type memoryStoreEntry struct {
+	origin             httpcacheutil.Origin
 	req                httpcache.RequestData
 	resp               httpcache.ResponseData
 	urlVariationConfig httpcache.URLVariationConfig
@@ -92,7 +94,7 @@ func (e *memoryStoreEntry) age() time.Duration {
 
 func (e *memoryStoreEntry) freshness(
 	privateCache bool,
-	extraMaxAge time.Duration,
+	maxStaleDur time.Duration,
 	heuristicFreshnessLifetime time.Duration,
 ) httpcache.Freshness {
 	age := e.age()
@@ -115,7 +117,8 @@ func (e *memoryStoreEntry) freshness(
 
 	var minFresh, maxAge, maxStale httpcache.Opt[time.Duration]
 
-	maxAge.Value, maxAge.Valid = freshnessLifetime+extraMaxAge-1, true
+	maxAge.Value, maxAge.Valid = freshnessLifetime, true
+	maxStale.Value, maxStale.Valid = maxStaleDur-1, maxStaleDur-1 > 0
 
 	return httpcache.CalculateFreshness(
 		age,
@@ -195,6 +198,36 @@ func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 	return nil, "", nil
 }
 
+// Invalidate implements the [github.com/nussjustin/httpcache.Store.Invalidate] method.
+func (m *MemoryStore) Invalidate(_ context.Context, url_ url.URL) error {
+	origin := httpcacheutil.MustOriginFromURL(url_)
+
+	escapedPath := url_.EscapedPath()
+
+	m.entriesMu.Lock()
+	defer m.entriesMu.Unlock()
+
+	for key, entries := range m.entries {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+			if !origin.Same(entry.origin) {
+				return false
+			}
+
+			if entry.req.URL.EscapedPath() != escapedPath {
+				return false
+			}
+
+			return true
+		})
+	}
+
+	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+		return len(entries) == 0
+	})
+
+	return nil
+}
+
 // Prune removes all expired responses from the store.
 func (m *MemoryStore) Prune() {
 	m.entriesMu.Lock()
@@ -228,7 +261,10 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 
 	key := m.key(req)
 
+	origin, _ := httpcacheutil.OriginFromURL(req.URL)
+
 	entry := &memoryStoreEntry{
+		origin:             origin,
 		req:                req,
 		resp:               resp,
 		urlVariationConfig: urlVariationConfig,
