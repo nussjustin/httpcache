@@ -1,4 +1,4 @@
-package httpcachetest
+package memstore
 
 import (
 	"context"
@@ -17,58 +17,58 @@ import (
 	"github.com/nussjustin/httpcache/httpcacheutil"
 )
 
-// MemoryStore implements a [github.com/nussjustin/httpcache.Store] that stores all responses in memory.
-//
-// The store has no limits on the number of stored responses and never removes expired responses, unless explicitly
-// requested by calling [MemoryStore.Prune].
-//
-// The zero value is safe for use and is equivalent to calling [NewMemoryStore] with a zero [MemoryStoreOpts].
-type MemoryStore struct {
-	opts MemoryStoreOpts
-
-	entriesMu sync.RWMutex
-	entries   map[string][]*memoryStoreEntry
-}
-
-// MemoryStoreOpts can be used to configure a [MemoryStore].
+// Options can be used to configure a [Store].
 //
 // The zero value is a valid configuration and should be good enough for most cases.
-type MemoryStoreOpts struct {
+type Options struct {
 	// HeuristicFreshnessLifetime is the default freshness lifetime used when no max-age/s-maxage Cache-Control
 	// directives or Expire are set and is used for checking if a response is expired.
 	HeuristicFreshnessLifetime time.Duration
 
 	// Private should be set to true if the cache is considered private.
 	//
-	// This is used when calculating freshness for expired items. See [MemoryStoreOpts.ReturnNilForExpiredResponses].
+	// This is used when calculating freshness for expired items. See [Options.ReturnNilForExpiredResponses].
 	Private bool
 
-	// ReturnDetailString enables returning details in [MemoryStore.Get] and [MemoryStore.Set] for use in the
+	// ReturnDetailString enables returning details in [MemoryStore.Get] and [Store.Set] for use in the
 	// Cache-Status header.
 	ReturnDetailString bool
 
-	// ReturnNilForExpiredResponses, if true, causes [MemoryStore.Get] to return (nil, nil) once a response is expired
+	// ReturnNilForExpiredResponses, if true, causes [Store.Get] to return (nil, nil) once a response is expired
 	// for at least ReturnNilForExpiredResponsesAfter.
 	ReturnNilForExpiredResponses bool
 
 	// ReturnNilForExpiredResponsesAfter is the duration after which an expired response is no longer returned.
 	ReturnNilForExpiredResponsesAfter time.Duration
 
-	// ValidateNoVarySearch, if true, causes [MemoryStore.Set] to return an error when the response contains an invalid
+	// ValidateNoVarySearch, if true, causes [Store.Set] to return an error when the response contains an invalid
 	// No-Vary-Search header.
 	//
 	// By default, the store will ignore an invalid header instead.
 	ValidateNoVarySearch bool
 }
 
-var _ httpcache.Store = (*MemoryStore)(nil)
+// Store implements a [github.com/nussjustin/httpcache.Store] that stores all responses in memory.
+//
+// The store has no limits on the number of stored responses and never removes expired responses, unless explicitly
+// requested by calling [Store.Prune].
+//
+// The zero value is safe for use and is equivalent to calling [New] with a zero [Options].
+type Store struct {
+	opts Options
 
-// NewMemoryStore returns a new [MemoryStore] using the given options.
-func NewMemoryStore(opts MemoryStoreOpts) *MemoryStore {
-	return &MemoryStore{opts: opts}
+	entriesMu sync.RWMutex
+	entries   map[string][]*storeEntry
 }
 
-type memoryStoreEntry struct {
+var _ httpcache.Store = (*Store)(nil)
+
+// New returns a new [Store] using the given options.
+func New(opts Options) *Store {
+	return &Store{opts: opts}
+}
+
+type storeEntry struct {
 	origin             httpcacheutil.Origin
 	groups             map[string]struct{}
 	req                httpcache.RequestData
@@ -77,7 +77,7 @@ type memoryStoreEntry struct {
 	vary               httpcache.Vary
 }
 
-func (e *memoryStoreEntry) age() time.Duration {
+func (e *storeEntry) age() time.Duration {
 	now := time.Now()
 
 	var age httpcache.Opt[time.Duration]
@@ -93,7 +93,7 @@ func (e *memoryStoreEntry) age() time.Duration {
 		e.resp.Time)
 }
 
-func (e *memoryStoreEntry) freshness(
+func (e *storeEntry) freshness(
 	privateCache bool,
 	maxStaleDur time.Duration,
 	heuristicFreshnessLifetime time.Duration,
@@ -131,14 +131,14 @@ func (e *memoryStoreEntry) freshness(
 
 var seed = maphash.MakeSeed()
 
-func (m *MemoryStore) detail(s string) string {
+func (m *Store) detail(s string) string {
 	if m.opts.ReturnDetailString {
 		return s
 	}
 	return ""
 }
 
-func (m *MemoryStore) key(req httpcache.RequestData) string {
+func (m *Store) key(req httpcache.RequestData) string {
 	var h maphash.Hash
 	h.SetSeed(seed)
 
@@ -156,7 +156,7 @@ func (m *MemoryStore) key(req httpcache.RequestData) string {
 }
 
 // Clear clears the store, removing all stored responses.
-func (m *MemoryStore) Clear() {
+func (m *Store) Clear() {
 	m.entriesMu.Lock()
 	defer m.entriesMu.Unlock()
 
@@ -164,7 +164,7 @@ func (m *MemoryStore) Clear() {
 }
 
 // Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
-func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
+func (m *Store) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	key := m.key(req)
 
 	m.entriesMu.RLock()
@@ -200,7 +200,7 @@ func (m *MemoryStore) Get(_ context.Context, req httpcache.RequestData) (resp *h
 }
 
 // Invalidate implements the [github.com/nussjustin/httpcache.Store.Invalidate] method.
-func (m *MemoryStore) Invalidate(_ context.Context, urls ...url.URL) error {
+func (m *Store) Invalidate(_ context.Context, urls ...url.URL) error {
 	m.entriesMu.Lock()
 	defer m.entriesMu.Unlock()
 
@@ -211,13 +211,13 @@ func (m *MemoryStore) Invalidate(_ context.Context, urls ...url.URL) error {
 	return nil
 }
 
-func (m *MemoryStore) invalidateOneLocked(url_ url.URL) {
+func (m *Store) invalidateOneLocked(url_ url.URL) {
 	origin := httpcacheutil.MustOriginFromURL(url_)
 
 	escapedPath := url_.EscapedPath()
 
 	for key, entries := range m.entries {
-		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *storeEntry) bool {
 			if !origin.Same(entry.origin) {
 				return false
 			}
@@ -230,13 +230,13 @@ func (m *MemoryStore) invalidateOneLocked(url_ url.URL) {
 		})
 	}
 
-	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+	maps.DeleteFunc(m.entries, func(_ string, entries []*storeEntry) bool {
 		return len(entries) == 0
 	})
 }
 
 // InvalidateGroups implements the [github.com/nussjustin/httpcache.Store.InvalidateGroups] method.
-func (m *MemoryStore) InvalidateGroups(_ context.Context, groups ...string) error {
+func (m *Store) InvalidateGroups(_ context.Context, groups ...string) error {
 	m.entriesMu.Lock()
 	defer m.entriesMu.Unlock()
 
@@ -247,39 +247,39 @@ func (m *MemoryStore) InvalidateGroups(_ context.Context, groups ...string) erro
 	return nil
 }
 
-func (m *MemoryStore) invalidateOneGroupLocked(group string) {
+func (m *Store) invalidateOneGroupLocked(group string) {
 	for key, entries := range m.entries {
-		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *storeEntry) bool {
 			_, ok := entry.groups[group]
 			return ok
 		})
 	}
 
-	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+	maps.DeleteFunc(m.entries, func(_ string, entries []*storeEntry) bool {
 		return len(entries) == 0
 	})
 }
 
 // Prune removes all expired responses from the store.
-func (m *MemoryStore) Prune() {
+func (m *Store) Prune() {
 	m.entriesMu.Lock()
 	defer m.entriesMu.Unlock()
 
 	for key, entries := range m.entries {
-		m.entries[key] = slices.DeleteFunc(entries, func(entry *memoryStoreEntry) bool {
+		m.entries[key] = slices.DeleteFunc(entries, func(entry *storeEntry) bool {
 			freshness := entry.freshness(m.opts.Private, 0, m.opts.HeuristicFreshnessLifetime)
 
 			return freshness == httpcache.FreshnessExpired
 		})
 	}
 
-	maps.DeleteFunc(m.entries, func(_ string, entries []*memoryStoreEntry) bool {
+	maps.DeleteFunc(m.entries, func(_ string, entries []*storeEntry) bool {
 		return len(entries) == 0
 	})
 }
 
 // Set implements the [github.com/nussjustin/httpcache.Store.Set] method.
-func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
+func (m *Store) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
 	vary := httpcache.ParseVary(resp.Header["Vary"])
 
 	if vary.Wildcard() {
@@ -306,7 +306,7 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 
 	origin, _ := httpcacheutil.OriginFromURL(req.URL)
 
-	entry := &memoryStoreEntry{
+	entry := &storeEntry{
 		origin:             origin,
 		groups:             groupsMap,
 		req:                req,
@@ -328,7 +328,7 @@ func (m *MemoryStore) Set(_ context.Context, req httpcache.RequestData, resp htt
 	}
 
 	if m.entries == nil {
-		m.entries = make(map[string][]*memoryStoreEntry)
+		m.entries = make(map[string][]*storeEntry)
 	}
 
 	m.entries[key] = append(entries, entry)

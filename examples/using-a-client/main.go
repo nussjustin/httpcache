@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/nussjustin/httpcache"
-	"github.com/nussjustin/httpcache/httpcachetest"
+	"github.com/nussjustin/httpcache/httpcachestore/memstore"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 			Name:           "my-awesome-app",
 			AddCacheStatus: true,
 		},
-		Store: &httpcachetest.MemoryStore{},
+		Store: memstore.New(memstore.Options{}),
 	}
 
 	req1, err := http.NewRequestWithContext(ctx, "GET", "https://example.com/", nil)

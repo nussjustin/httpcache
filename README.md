@@ -32,7 +32,7 @@ client := httpcache.Client{
         Name:           "my-awesome-app",
         AddCacheStatus: true,
     },
-    Store: &httpcachetest.MemoryStore{},
+    Store: memstore.New(memstore.Options{}),
 }
 ```
 

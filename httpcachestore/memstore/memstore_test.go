@@ -1,4 +1,4 @@
-package httpcachetest_test
+package memstore_test
 
 import (
 	"net/http"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nussjustin/httpcache"
+	"github.com/nussjustin/httpcache/httpcachestore/memstore"
 	"github.com/nussjustin/httpcache/httpcachetest"
 )
 
@@ -18,7 +19,7 @@ func TestMemoryStore(t *testing.T) {
 				SupportsCacheGroups: true,
 			},
 			func() httpcache.Store {
-				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{})
+				return memstore.New(memstore.Options{})
 			},
 		)
 	})
@@ -29,7 +30,7 @@ func TestMemoryStore(t *testing.T) {
 				SupportsCacheGroups: true,
 			},
 			func() httpcache.Store {
-				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
+				return memstore.New(memstore.Options{
 					ReturnDetailString: true,
 				})
 			},
@@ -43,7 +44,7 @@ func TestMemoryStore(t *testing.T) {
 				SupportsCacheGroups:           true,
 			},
 			func() httpcache.Store {
-				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
+				return memstore.New(memstore.Options{
 					ReturnNilForExpiredResponses: true,
 				})
 			},
@@ -58,7 +59,7 @@ func TestMemoryStore(t *testing.T) {
 				SupportsCacheGroups:                true,
 			},
 			func() httpcache.Store {
-				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
+				return memstore.New(memstore.Options{
 					ReturnNilForExpiredResponses:      true,
 					ReturnNilForExpiredResponsesAfter: 30 * time.Second,
 				})
@@ -73,7 +74,7 @@ func TestMemoryStore(t *testing.T) {
 				ValidatesNoVarySearch: true,
 			},
 			func() httpcache.Store {
-				return httpcachetest.NewMemoryStore(httpcachetest.MemoryStoreOpts{
+				return memstore.New(memstore.Options{
 					ValidateNoVarySearch: true,
 				})
 			},
@@ -83,7 +84,7 @@ func TestMemoryStore(t *testing.T) {
 
 func TestMemoryStore_Clear(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var s httpcachetest.MemoryStore
+		var s memstore.Store
 
 		baseURL, _ := url.Parse("https://example.com")
 
@@ -153,7 +154,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 
 func TestMemoryStore_Prune(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var s httpcachetest.MemoryStore
+		var s memstore.Store
 
 		baseURL, _ := url.Parse("https://example.com")
 

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/nussjustin/httpcache"
-	"github.com/nussjustin/httpcache/httpcachetest"
+	"github.com/nussjustin/httpcache/httpcachestore/memstore"
 )
 
 func headerEqual(a, b http.Header) bool {
@@ -1320,7 +1320,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 				tt.config.AddCacheStatus = withCacheStatus
 				tt.config.Name = "my-cache"
 
-				var sharedStore httpcachetest.MemoryStore
+				var sharedStore memstore.Store
 
 				for i, tx := range tt.txs {
 					if tx.resp != nil {
