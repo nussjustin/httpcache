@@ -73,7 +73,7 @@ type Origin struct {
 	// Scheme contains the lower-cased scheme, e.g. "https".
 	Scheme string
 
-	// Host contains the host name without any normalization.
+	// Host contains the lower-cased host name.
 	Host string
 
 	// Port contains the port.
@@ -142,7 +142,7 @@ func OriginFromURL(u url.URL) (Origin, error) {
 
 	return Origin{
 		Scheme: scheme,
-		Host:   u.Hostname(),
+		Host:   strings.ToLower(u.Hostname()),
 		Port:   port,
 	}, nil
 }

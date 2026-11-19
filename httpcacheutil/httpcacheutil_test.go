@@ -190,6 +190,11 @@ func TestOriginFromURL(t *testing.T) {
 			want: httpcacheutil.Origin{Scheme: "https", Host: "example.com", Port: 443},
 		},
 		{
+			name: "non-lowercase host",
+			url:  url.URL{Scheme: "https", Host: "eXaMpLe.com", Path: "/"},
+			want: httpcacheutil.Origin{Scheme: "https", Host: "example.com", Port: 443},
+		},
+		{
 			name: "port with leading zeroes",
 			url:  url.URL{Scheme: "https", Host: "example.com:01443", Path: "/"},
 			want: httpcacheutil.Origin{Scheme: "https", Host: "example.com", Port: 1443},
