@@ -13,6 +13,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/nussjustin/httpcache"
 	"github.com/nussjustin/httpcache/httpcachestore/memstore"
 )
@@ -176,6 +178,25 @@ func newResp(opts ...respOpt) *http.Response {
 	}
 
 	return resp
+}
+
+func diffReader(tb testing.TB, r1 io.Reader, r2 io.Reader) string {
+	var b1, b2 []byte
+	var err error
+
+	if r1 != nil {
+		if b1, err = io.ReadAll(r1); err != nil {
+			tb.Fatalf("failed to read from r1: %s", err)
+		}
+	}
+
+	if r2 != nil {
+		if b2, err = io.ReadAll(r2); err != nil {
+			tb.Fatalf("failed to read from r2: %s", err)
+		}
+	}
+
+	return cmp.Diff(string(b1), string(b2))
 }
 
 func TestClient_Do(t *testing.T) {
@@ -787,6 +808,67 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			},
 		},
 		{
+			name: "request with body",
+			txs: []transaction{
+				{
+					req:  newReq(withReqBody(strings.NewReader("first request body"))),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=240")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(withReqBody(strings.NewReader("first request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req:  newReq(withReqBody(strings.NewReader("second request body"))),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq:    newReq(withReqBody(strings.NewReader("second request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req: newReq(withReqBody(strings.NewReader("second request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
+					wantResp: newResp(
+						withRespHeader("Age", "60"),
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespHeader("Transaction-Id", "1")),
+				},
+				{
+					req: newReq(withReqBody(strings.NewReader("first request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    time.Minute,
+					},
+					wantReq: newReq(),
+					wantResp: newResp(
+						withRespHeader("Age", "180"),
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
 			name: "expect header set",
 			txs: []transaction{
 				{
@@ -1346,8 +1428,16 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 									t.Errorf("Tx %d: Do() Request.Header = %#v, want %#v", i, got, want)
 								}
 
+								if diff := diffReader(t, tx.wantReq.Body, req.Body); diff != "" {
+									t.Errorf("Tx %d: Do() Request.Body mismatch (-want +got):\n%s", i, diff)
+								}
+
 								if tx.respErr != nil {
 									return nil, tx.respErr
+								}
+
+								if tx.resp == nil {
+									t.Fatalf("Tx %d: no response defined for transaction", i)
 								}
 
 								tx.resp.Request = req
