@@ -506,15 +506,12 @@ func responseDataFromResponseWithoutBody(resp *http.Response, respDirectives Res
 }
 
 func readBody[T http.Request | http.Response](t *T) (body []byte, err error) {
-	var contentLength int64
 	var reader io.ReadCloser
 
 	switch x := any(t).(type) {
 	case *http.Request:
-		contentLength = x.ContentLength
 		reader = x.Body
 	case *http.Response:
-		contentLength = x.ContentLength
 		reader = x.Body
 	}
 
@@ -537,10 +534,5 @@ func readBody[T http.Request | http.Response](t *T) (body []byte, err error) {
 		}
 	}()
 
-	if contentLength > 0 {
-		body = make([]byte, 0, int(contentLength))
-	}
-
-	body, err = io.ReadAll(reader)
-	return body, err
+	return io.ReadAll(reader)
 }
