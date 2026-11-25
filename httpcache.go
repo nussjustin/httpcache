@@ -535,29 +535,7 @@ func parseDeltaSeconds(s string) (uint64, error) {
 //
 // This is the same as [http.ParseTime] except that it is case-insensitive.
 func ParseExpires(s string) (time.Time, error) {
-	if l := len(s); l == len(http.TimeFormat) {
-		if !isUpper(s[0]) {
-			s = strings.ToUpper(s[0:1]) + s[1:l]
-		}
-
-		if !isLower(s[1]) || !isLower(s[2]) {
-			s = s[0:1] + strings.ToUpper(s[1:3]) + s[3:l]
-		}
-
-		if !isUpper(s[l-3]) || !isUpper(s[l-2]) || !isUpper(s[l-1]) {
-			s = s[:l-3] + strings.ToUpper(s[l-3:])
-		}
-	}
-
-	return http.ParseTime(s)
-}
-
-func isLower(b byte) bool {
-	return b >= 'a' && b <= 'z'
-}
-
-func isUpper(b byte) bool {
-	return b >= 'A' && b <= 'Z'
+	return http.ParseTime(strings.ToUpper(s))
 }
 
 // Vary contains a sorted list of unique header names, used to vary responses.

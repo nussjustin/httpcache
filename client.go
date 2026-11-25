@@ -123,12 +123,16 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 
 		date, _ := http.ParseTime(stored.Header.Get("Date"))
 
-		// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
-		//
-		// When there is more than one value present for a given directive (e.g., two Expires header field lines or
-		// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
-		// should be considered stale.
-		expires, _ := ParseExpires(stored.Header.Get("Expires"))
+		var expires time.Time
+
+		if expiresValues := stored.Header["Expires"]; len(expiresValues) > 0 {
+			// From https://www.rfc-editor.org/rfc/rfc9111#name-calculating-freshness-lifet
+			//
+			// When there is more than one value present for a given directive (e.g., two Expires header field lines or
+			// multiple Cache-Control: max-age directives), either the first occurrence should be used or the response
+			// should be considered stale.
+			expires, _ = ParseExpires(expiresValues[0])
+		}
 
 		respDirectives, _ := c.Config.ParseResponseDirectives(stored.Header)
 
