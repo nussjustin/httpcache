@@ -277,7 +277,26 @@ func (c Config) IsSafeMethod(method string) bool {
 }
 
 // RemoveUnstorableHeaders removes response headers that must not be stored.
-func (c Config) RemoveUnstorableHeaders(headers http.Header) {
+//
+// It returns the updated map.
+//
+// If copyOnChange is true, the map will be copied before removing headers and the copy will be returned.
+func (c Config) RemoveUnstorableHeaders(headers http.Header, copyOnChange bool) http.Header {
+	var copied bool
+
+	del := func(name string) {
+		if _, ok := headers[name]; !ok {
+			return
+		}
+
+		if copyOnChange && !copied {
+			headers = headers.Clone()
+			copied = true
+		}
+
+		delete(headers, name)
+	}
+
 	//  3.1. Storing Header and Trailer Fields
 	//
 	// Caches MUST include all received response header fields -- including unrecognized ones -- when storing a response;
@@ -287,13 +306,13 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 
 	// The Connection header field and fields whose names are listed in it are required by Section 7.6.1 of [HTTP] to be
 	// removed before forwarding the message. This MAY be implemented by doing so before storage.
-	delete(headers, "Connection")
+	del("Connection")
 
 	// Likewise, some fields' semantics require them to be removed before forwarding the message, and this MAY be
 	// implemented by doing so before storage; see Section 7.6.1 of [HTTP] for some examples.
 	for _, tokens := range connection {
 		for header := range strings.FieldsSeq(tokens) {
-			delete(headers, http.CanonicalHeaderKey(header))
+			del(http.CanonicalHeaderKey(header))
 		}
 	}
 
@@ -304,7 +323,7 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 		directives, _ := c.ParseResponseDirectives(headers)
 
 		for _, header := range directives.PrivateHeaders {
-			delete(headers, http.CanonicalHeaderKey(header))
+			del(http.CanonicalHeaderKey(header))
 		}
 	}
 
@@ -313,10 +332,12 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header) {
 		// unless the cache incorporates the identity of the proxy into the cache key. Effectively, this is limited to
 		// Proxy-Authenticate (Section 11.7.1 of [HTTP]), Proxy-Authentication-Info (Section 11.7.3 of [HTTP]), and
 		// Proxy-Authorization (Section 11.7.2 of [HTTP]).
-		delete(headers, "Proxy-Authenticate")
-		delete(headers, "Proxy-Authentication-Info")
-		delete(headers, "Proxy-Authorization")
+		del("Proxy-Authenticate")
+		del("Proxy-Authentication-Info")
+		del("Proxy-Authorization")
 	}
+
+	return headers
 }
 
 // CalculateAge calculates the age for a response as defined in RFC 9111, Section 4.2.3.

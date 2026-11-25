@@ -224,10 +224,7 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 			return nil, Status{}, err
 		}
 
-		// Needed since we must remove unstorable headers
-		respData.Header = respData.Header.Clone()
-
-		c.Config.RemoveUnstorableHeaders(respData.Header)
+		respData.Header = c.Config.RemoveUnstorableHeaders(respData.Header, true)
 
 		if detail, err := c.Store.Set(req.Context(), reqData, respData); err == nil {
 			status.Detail, status.Stored = detail, true

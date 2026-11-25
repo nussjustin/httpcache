@@ -998,17 +998,45 @@ func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.headers.Clone()
+	run := func(t *testing.T, copyOnChange bool) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				input := tt.headers.Clone()
 
-			tt.config.RemoveUnstorableHeaders(got)
+				got := tt.config.RemoveUnstorableHeaders(input, copyOnChange)
 
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Config.RemoveUnstorableHeaders() mismatch (-want +got):\n%s", diff)
-			}
-		})
+				if diff := cmp.Diff(tt.want, got); diff != "" {
+					t.Errorf("Config.RemoveUnstorableHeaders() mismatch (-want +got):\n%s", diff)
+				}
+
+				if copyOnChange {
+					if !headerEqual(input, tt.headers) {
+						t.Errorf("Config.RemoveUnstorableHeaders() modified original map")
+					}
+
+					if headerEqual(got, input) {
+						if !mapsIdentical(got, input) {
+							t.Error("Config.RemoveUnstorableHeaders() returned new map even though the map was not changed")
+						}
+					} else {
+						if mapsIdentical(got, input) {
+							t.Error("Config.RemoveUnstorableHeaders() returned same map even though map was changed")
+						}
+					}
+				} else if !mapsIdentical(got, input) {
+					t.Error("Config.RemoveUnstorableHeaders() returned new map")
+				}
+			})
+		}
 	}
+
+	t.Run("copy", func(t *testing.T) {
+		run(t, true)
+	})
+
+	t.Run("no copy", func(t *testing.T) {
+		run(t, false)
+	})
 }
 
 func TestParseAge(t *testing.T) {
