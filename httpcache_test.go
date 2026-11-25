@@ -1745,6 +1745,8 @@ func TestParseRequestDirectives(t *testing.T) {
 }
 
 func BenchmarkParseRequestDirectives(b *testing.B) {
+	b.ReportAllocs()
+
 	for b.Loop() {
 		_, _ = httpcache.ParseRequestDirectives(`max-age=100, max-stale=200, min-fresh=300, no-cache, no-store, no-transform, only-if-cached, extra, extra-with-value="test"`)
 	}
@@ -2255,6 +2257,8 @@ func TestParseResponseDirectives(t *testing.T) {
 }
 
 func BenchmarkParseResponseDirectives(b *testing.B) {
+	b.ReportAllocs()
+
 	for b.Loop() {
 		_, _ = httpcache.ParseResponseDirectives(`max-age=100, must-revalidate, must-understand, no-cache="Header-1 Header-2", no-store, no-transform, private="Header-3 Header-4", proxy-revalidate, public, s-maxage=200`)
 	}
