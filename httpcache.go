@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nussjustin/httpsfv"
@@ -1281,47 +1282,56 @@ func (s Status) AppendText(text []byte) ([]byte, error) {
 		return nil, errStatusHitAndForwardedSet
 	}
 
-	item := s.asItem()
+	item, _ := statusItemPool.Get().(*httpsfv.Item)
+	if item == nil {
+		item = &httpsfv.Item{}
+	}
+	defer func() {
+		item.Parameters.Clear()
+		statusItemPool.Put(item)
+	}()
+
+	s.intoItem(item)
 
 	return item.AppendText(text)
 }
 
-func (s Status) asItem() httpsfv.Item {
-	var p httpsfv.Parameters
+var statusItemPool sync.Pool
+
+func (s Status) intoItem(i *httpsfv.Item) {
+	i.BareItem = httpsfv.BareItemString(s.Cache)
 
 	if s.Hit {
-		p.Set("hit", httpsfv.BareItemBoolean(true))
+		i.Parameters.Set("hit", httpsfv.BareItemBoolean(true))
 	}
 
 	if s.Forwarded != "" {
-		p.Set("fwd", httpsfv.BareItemToken(s.Forwarded.String()))
+		i.Parameters.Set("fwd", httpsfv.BareItemToken(s.Forwarded.String()))
 	}
 
 	if s.ForwardedStatus != 0 {
-		p.Set("fwd-status", httpsfv.BareItemInteger(int64(s.ForwardedStatus)))
+		i.Parameters.Set("fwd-status", httpsfv.BareItemInteger(int64(s.ForwardedStatus)))
 	}
 
 	if s.TTL != 0 {
-		p.Set("ttl", httpsfv.BareItemInteger(int64(s.TTL.Seconds())))
+		i.Parameters.Set("ttl", httpsfv.BareItemInteger(int64(s.TTL.Seconds())))
 	}
 
 	if s.Stored {
-		p.Set("stored", httpsfv.BareItemBoolean(true))
+		i.Parameters.Set("stored", httpsfv.BareItemBoolean(true))
 	}
 
 	if s.Collapsed {
-		p.Set("collapsed", httpsfv.BareItemBoolean(true))
+		i.Parameters.Set("collapsed", httpsfv.BareItemBoolean(true))
 	}
 
 	if s.Key != "" {
-		p.Set("key", httpsfv.BareItemString(s.Key))
+		i.Parameters.Set("key", httpsfv.BareItemString(s.Key))
 	}
 
 	if s.Detail != "" {
-		p.Set("detail", httpsfv.BareItemString(s.Detail))
+		i.Parameters.Set("detail", httpsfv.BareItemString(s.Detail))
 	}
-
-	return httpsfv.Item{BareItem: httpsfv.BareItemString(s.Cache), Parameters: p}
 }
 
 // ForwardedReason is an enum of the possible reasons a request was forwarded by a cache.
