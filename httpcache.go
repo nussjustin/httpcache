@@ -44,8 +44,7 @@ type Config struct {
 	// Private configures the cache to be private, as understood by RFC 9111.
 	Private bool
 
-	// RespectRequestDirectiveNoCache determines whether [Config.AllowsCachedResponseFor] checks the no-cache
-	// Cache-Control directive.
+	// RespectRequestDirectiveNoCache determines whether [Client.Do] checks no-cache Cache-Control directive of the request.
 	//
 	// If true, the directive is checked and, if set, causes the method to return false. Otherwise, the directive is
 	// ignored.
@@ -76,7 +75,7 @@ type Config struct {
 
 	// SupportedRequestMethods is the list of request methods that can be cached.
 	//
-	// If nil, defaults to DefaultSupportedRequestMethods.
+	// If nil, defaults to [DefaultSupportedRequestMethods].
 	SupportedRequestMethods []string
 
 	// UnderstoodResponseCodes must contain the response codes that the cache understands.

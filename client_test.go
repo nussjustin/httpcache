@@ -41,6 +41,11 @@ func (r errReader) Read([]byte) (n int, err error) {
 
 type roundTripperFunc func(req *http.Request) (*http.Response, error)
 
+// Do implements the [github.com/nussjustin/httpcache.HTTPClient] interface.
+func (f roundTripperFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
@@ -82,10 +87,10 @@ func (t *testStore) InvalidateGroups(ctx context.Context, groups ...string) erro
 }
 
 func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
+	t.stored++
 	if t.failOnStore {
 		return "fail-on-store", errStoreFail
 	}
-	t.stored++
 	return t.wrapped.Set(ctx, req, resp)
 }
 
@@ -958,6 +963,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					req:         newReq(),
 					resp:        newResp(withRespHeader("Cache-Control", "public, max-age=120")),
 					failOnStore: true,
+					wantStored:  1,
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
 						Detail:    "miss",
@@ -1492,6 +1498,187 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			})
 		})
 	}
+}
+
+type dummyStore struct {
+	resp *httpcache.ResponseData
+}
+
+var _ httpcache.Store = (*dummyStore)(nil)
+
+func (s *dummyStore) Get(_ context.Context, _ httpcache.RequestData) (*httpcache.ResponseData, string, error) {
+	return s.resp, "", nil
+}
+
+func (s *dummyStore) Invalidate(_ context.Context, _ ...url.URL) error {
+	return nil
+}
+
+func (s *dummyStore) InvalidateGroups(_ context.Context, _ ...string) error {
+	return nil
+}
+
+func (s *dummyStore) Set(_ context.Context, _ httpcache.RequestData, _ httpcache.ResponseData) (string, error) {
+	return "", nil
+}
+
+func BenchmarkClient_Do(b *testing.B) {
+	b.Run("cache hit", func(b *testing.B) {
+		req := newReq(
+			withReqMethod("QUERY"),
+			withReqHeader("Cache-Control", "no-cache"),
+			withReqBody(strings.NewReader("request body")))
+
+		store := &dummyStore{
+			resp: &httpcache.ResponseData{
+				Time:       time.Now(),
+				Status:     http.StatusText(http.StatusOK),
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Cache-Control": []string{"public, max-age=86400"},
+				},
+				Body: []byte("response body"),
+			},
+		}
+
+		client := &httpcache.Client{
+			Config: httpcache.Config{
+				Name:           "my-cache",
+				AddCacheStatus: true,
+			},
+			Store: store,
+			HTTPClient: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				panic("request not served from cache")
+			}),
+		}
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			resp, err := client.Do(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = resp.Body.Close()
+		}
+	})
+
+	b.Run("cache miss", func(b *testing.B) {
+		req := newReq(
+			withReqMethod("QUERY"),
+			withReqHeader("Cache-Control", "no-cache"),
+			withReqBody(strings.NewReader("request body")))
+
+		resp := newResp(
+			withRespHeader("Cache-Control", "public, max-age=120"),
+			withRespBody(strings.NewReader("response body")))
+
+		store := &dummyStore{}
+
+		client := &httpcache.Client{
+			Config: httpcache.Config{
+				Name:           "my-cache",
+				AddCacheStatus: true,
+			},
+			Store: store,
+			HTTPClient: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return resp, nil
+			}),
+		}
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			resp, err := client.Do(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = resp.Body.Close()
+		}
+	})
+
+	b.Run("uncacheable request", func(b *testing.B) {
+		req := newReq(
+			withReqMethod("QUERY"),
+			withReqHeader("Cache-Control", "no-cache"),
+			withReqBody(strings.NewReader("request body")))
+
+		resp := newResp(
+			withRespHeader("Cache-Control", "public, max-age=120"),
+			withRespBody(strings.NewReader("response body")))
+
+		store := &testStore{
+			failOnGet:   true,
+			failOnStore: true,
+		}
+
+		client := &httpcache.Client{
+			Config: httpcache.Config{
+				Name:                           "my-cache",
+				AddCacheStatus:                 true,
+				RespectRequestDirectiveNoCache: true,
+			},
+			Store: store,
+			HTTPClient: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return resp, nil
+			}),
+		}
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			resp, err := client.Do(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			if store.stored != 0 {
+				b.Fatalf("unexpected store calls: got %d, want 0", store.stored)
+			}
+		}
+	})
+
+	b.Run("uncacheable response", func(b *testing.B) {
+		req := newReq(
+			withReqMethod("QUERY"),
+			withReqHeader("Cache-Control", "no-cache"),
+			withReqBody(strings.NewReader("request body")))
+
+		resp := newResp(
+			withRespHeader("Cache-Control", "private"),
+			withRespBody(strings.NewReader("response body")))
+
+		store := &testStore{
+			failOnGet:   true,
+			failOnStore: true,
+		}
+
+		client := &httpcache.Client{
+			Config: httpcache.Config{
+				Name:           "my-cache",
+				AddCacheStatus: true,
+			},
+			Store: store,
+			HTTPClient: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return resp, nil
+			}),
+		}
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			resp, err := client.Do(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			if store.stored != 0 {
+				b.Fatalf("unexpected store calls: got %d, want 0", store.stored)
+			}
+		}
+	})
 }
 
 func TestResponseData_Age(t *testing.T) {
