@@ -2,7 +2,6 @@ package cachecontrol_test
 
 import (
 	"errors"
-	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,7 +10,7 @@ import (
 	"github.com/nussjustin/httpcache/internal/cachecontrol"
 )
 
-func TestParse(t *testing.T) {
+func TestParser(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -185,11 +184,18 @@ func TestParse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []cachecontrol.Directive
 
-			for d, err := range cachecontrol.Parse(tt.in) {
-				if err != nil {
+			p := cachecontrol.NewParser(tt.in)
+
+			for p.Next() {
+				if err := p.Err(); err != nil {
 					t.Fatal(err)
 				}
-				got = append(got, d)
+
+				got = append(got, p.Directive())
+			}
+
+			if err := p.Err(); err != nil {
+				t.Fatal(err)
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
@@ -199,18 +205,24 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func BenchmarkParse(b *testing.B) {
+func BenchmarkParser(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
+		p := cachecontrol.NewParser(`private, no-cache, no-store="header1 header2 header3"`)
+
 		var got int
 
-		for _, err := range cachecontrol.Parse(`private, no-cache, no-store="header1 header2 header3"`) {
+		for p.Next() {
 			got++
 
-			if err != nil {
+			if err := p.Err(); err != nil {
 				b.Fatal(err)
 			}
+		}
+
+		if err := p.Err(); err != nil {
+			b.Fatal(err)
 		}
 
 		if want := 3; got != want {
@@ -219,7 +231,7 @@ func BenchmarkParse(b *testing.B) {
 	}
 }
 
-func FuzzParse(f *testing.F) {
+func FuzzParser(f *testing.F) {
 	f.Add(`public"`)
 	f.Add(`public, max-age=604800"`)
 	f.Add(`public, max-age=604800, immutable"`)
@@ -228,15 +240,17 @@ func FuzzParse(f *testing.F) {
 	f.Add(`private, no-cache, no-store="header1 header2 header3\ header4\"`)
 
 	f.Fuzz(func(t *testing.T, input string) {
-		for _, err := range cachecontrol.Parse(input) {
-			if err != nil {
+		p := cachecontrol.NewParser(input)
+
+		for p.Next() {
+			if err := p.Err(); err != nil {
 				t.Error(err)
 			}
 		}
 	})
 }
 
-func TestParseStructured(t *testing.T) {
+func TestNewParserForStructured(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      string
@@ -405,15 +419,23 @@ func TestParseStructured(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got []cachecontrol.Directive
 
-			for d, err := range cachecontrol.ParseStructured(tt.in) {
-				if err != nil {
+			p, err := cachecontrol.NewParserForStructured(tt.in)
+			if err != nil {
+				if !errors.Is(err, tt.wantErr) && (err == nil || tt.wantErr == nil || err.Error() != tt.wantErr.Error()) {
+					t.Errorf("ParseStructured() error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			for p.Next() {
+				if err := p.Err(); err != nil {
 					if !errors.Is(err, tt.wantErr) && (err == nil || tt.wantErr == nil || err.Error() != tt.wantErr.Error()) {
 						t.Errorf("ParseStructured() error = %v, want %v", err, tt.wantErr)
 					}
 					return
 				}
 
-				got = append(got, d)
+				got = append(got, p.Directive())
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
@@ -423,7 +445,7 @@ func TestParseStructured(t *testing.T) {
 	}
 }
 
-func TestTokenize(t *testing.T) {
+func TestTokenizer(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -670,7 +692,13 @@ func TestTokenize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := slices.Collect(cachecontrol.Tokenize(tt.in))
+			var got []cachecontrol.Token
+
+			tokenizer := cachecontrol.NewTokenizer(tt.in)
+
+			for tokenizer.Next() {
+				got = append(got, tokenizer.Token())
+			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Tokenize() mismatch (-want +got):\n%s", diff)

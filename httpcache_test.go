@@ -1926,7 +1926,8 @@ func TestParseStructuredRequestDirectives(t *testing.T) {
 			name: `invalid quoted value`,
 			in:   `no-cache, extra-with-value="test, no-store`,
 			wantErr: []string{
-				"invalid item: invalid bare item: invalid string: missing closing quote",
+				"invalid item",
+				"invalid bare item: invalid string: missing closing quote",
 			},
 		},
 		{
@@ -2434,7 +2435,8 @@ func TestParseStructuredResponseDirectives(t *testing.T) {
 			name: `invalid quoted value`,
 			in:   `no-cache, extra-with-value="test, no-store`,
 			wantErr: []string{
-				"invalid item: invalid bare item: invalid string: missing closing quote",
+				"invalid item",
+				"invalid bare item: invalid string: missing closing quote",
 			},
 		},
 		{

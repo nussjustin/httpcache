@@ -748,21 +748,27 @@ func parseRequestDirectives(header string, structured bool) (RequestDirectives, 
 		return RequestDirectives{}, nil
 	}
 
-	var seq iter.Seq2[cachecontrol.Directive, error]
+	var parser cachecontrol.Parser
+	var err error
 	if structured {
-		seq = cachecontrol.ParseStructured(header)
+		parser, err = cachecontrol.NewParserForStructured(header)
 	} else {
-		seq = cachecontrol.Parse(header)
+		parser = cachecontrol.NewParser(header)
+	}
+	if err != nil {
+		return RequestDirectives{}, err
 	}
 
 	var c RequestDirectives
 	var errs []error
 
-	for d, err := range seq {
-		if err != nil {
+	for parser.Next() {
+		if err := parser.Err(); err != nil {
 			errs = append(errs, err)
 			continue
 		}
+
+		d := parser.Directive()
 
 		name := strings.ToLower(d.Name)
 
@@ -848,8 +854,6 @@ func parseRequestDirectives(header string, structured bool) (RequestDirectives, 
 			})
 		}
 	}
-
-	var err error
 
 	if len(errs) > 0 {
 		err = errors.Join(errs...)
@@ -964,21 +968,27 @@ func parseResponseDirectives(header string, structured bool) (ResponseDirectives
 		return ResponseDirectives{}, nil
 	}
 
-	var seq iter.Seq2[cachecontrol.Directive, error]
+	var parser cachecontrol.Parser
+	var err error
 	if structured {
-		seq = cachecontrol.ParseStructured(header)
+		parser, err = cachecontrol.NewParserForStructured(header)
 	} else {
-		seq = cachecontrol.Parse(header)
+		parser = cachecontrol.NewParser(header)
+	}
+	if err != nil {
+		return ResponseDirectives{}, err
 	}
 
 	var c ResponseDirectives
 	var errs []error
 
-	for d, err := range seq {
-		if err != nil {
+	for parser.Next() {
+		if err := parser.Err(); err != nil {
 			errs = append(errs, err)
 			continue
 		}
+
+		d := parser.Directive()
 
 		name := strings.ToLower(d.Name)
 
@@ -1062,8 +1072,6 @@ func parseResponseDirectives(header string, structured bool) (ResponseDirectives
 			})
 		}
 	}
-
-	var err error
 
 	if len(errs) > 0 {
 		err = errors.Join(errs...)

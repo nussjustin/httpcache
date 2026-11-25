@@ -23,151 +23,197 @@ type Directive struct {
 	HasValue bool
 }
 
-// Parse parses the given Cache-Control value and returns a sequence of directives.
+// Parser parses a Cache-Control value and returns a sequence of directives.
 //
-// The parsing uses [Tokenize] to extract tokens from the given string and tries its best to form directives even from
-// non RFC 9111 compliant inputs.
+// This is implemented as a struct with methods and not as iter.Seq2 in order to avoid allocations.
+type Parser struct {
+	dir Directive
+	err error
+
+	// for structured fields
+	iterNext func() (string, httpsfv.ItemOrInnerList, bool)
+	iterDone func()
+
+	toks  Tokenizer
+	state parserState
+}
+
+type parserState uint8
+
+const (
+	stateName parserState = iota
+	stateValue
+)
+
+// NewParser returns a Parser that parses a Cache-Control header as defined in RFC 9111, while trying its best to form
+// directives even from non RFC 9111 compliant inputs.
 //
 // Notably, a directive like `directive1=value "with" space,directive2` will _correctly_ parse the first directive with
 // the value `value "with" space`.
-//
-// The error returned by the sequence is always nil.
-func Parse(s string) iter.Seq2[Directive, error] {
-	return func(yield func(Directive, error) bool) {
-		const (
-			stateName = iota
-			stateValue
-		)
-
-		state := stateName
-
-		var name string
-		var value string
-
-		var lastToken Token
-
-		for token := range Tokenize(s) {
-			switch state {
-			case stateName:
-				switch token.Type {
-				case TokenTypeComma:
-					if name == "" {
-						break
-					}
-
-					if !yield(Directive{Name: name}, nil) {
-						return
-					}
-
-					name = ""
-				case TokenTypeEquals:
-					state = stateValue
-				case TokenTypeSpace:
-					// Do nothing
-				case TokenTypeText:
-					if name != "" && lastToken.Type == TokenTypeSpace {
-						name += lastToken.Text
-					}
-
-					name += token.Text
-				case TokenTypeInvalid:
-					panic("unreachable")
-				}
-			case stateValue:
-				switch token.Type {
-				case TokenTypeComma:
-					if !yield(Directive{Name: name, Value: value, HasValue: true}, nil) {
-						return
-					}
-
-					name, value = "", ""
-
-					state = stateName
-				case TokenTypeEquals:
-					if value != "" && lastToken.Type == TokenTypeSpace {
-						value += lastToken.Text
-					}
-
-					value += token.Text
-				case TokenTypeSpace:
-					// Do nothing
-				case TokenTypeText:
-					if value != "" && lastToken.Type == TokenTypeSpace {
-						value += lastToken.Text
-					}
-
-					value += token.Text
-				case TokenTypeInvalid:
-					panic("unreachable")
-				}
-			}
-
-			lastToken = token
-		}
-
-		if state == stateName && name == "" {
-			return
-		}
-
-		yield(Directive{Name: name, Value: value, HasValue: state == stateValue}, nil)
-	}
+func NewParser(s string) Parser {
+	return Parser{toks: Tokenizer{input: s}, state: stateName}
 }
 
-// ParseStructured is like [Parse], but parses the header as a structured field, as defined in RFC 9651 and as
+// ParseStructured is like [NewParser], but parses the header as a structured field, as defined in RFC 9651 and as
 // required when parsing a targeted HTTP cache control header as specified by RFC 9213.
+func NewParserForStructured(s string) (Parser, error) {
+	dict, err := httpsfv.Parse[httpsfv.Dictionary](s)
+	if err != nil {
+		return Parser{}, err
+	}
+	next, done := iter.Pull2(dict.All())
+	return Parser{iterNext: next, iterDone: done}, nil
+}
+
+// Directive returns the directive parsed during the last call to Next.
+func (p *Parser) Directive() Directive {
+	return p.dir
+}
+
+// Err returns the error encountered during the last call to Next.
+func (p *Parser) Err() error {
+	return p.err
+}
+
+// Next parses the next directive.
 //
-// Unlike [Parse], this can yield non-nil errors.
-func ParseStructured(s string) iter.Seq2[Directive, error] {
-	return func(yield func(Directive, error) bool) {
-		d, err := httpsfv.Parse[httpsfv.Dictionary](s)
-		if err != nil {
-			yield(Directive{}, err)
-			return
-		}
+// It returns false if the input has been fully consumed, or true otherwise.
+//
+// Note that this can return true even if there was an error and that another call to Next could again succeed and
+// reset the error.
+func (p *Parser) Next() bool {
+	if p.iterNext != nil {
+		return p.nextStructured()
+	}
+	return p.next()
+}
 
-		for k, v := range d.All() {
-			if v.Type() == httpsfv.ItemOrInnerListTypeInnerList {
-				if !yield(Directive{}, fmt.Errorf("directive %q must be an item", k)) {
-					return
-				}
+func (p *Parser) next() bool {
+	var name string
+	var value string
 
-				continue
-			}
+	lastToken := p.toks.Token()
 
-			i := v.Item()
+	var found bool
 
-			d := Directive{Name: k}
+	for !found && p.toks.Next() {
+		token := p.toks.Token()
 
-			switch i.Type() {
-			case httpsfv.BareItemTypeBoolean:
-				if i.Boolean() {
+		switch p.state {
+		case stateName:
+			switch token.Type {
+			case TokenTypeComma:
+				if name == "" {
 					break
 				}
 
-				// Treat a false as not being set
-				continue
-			case httpsfv.BareItemTypeInteger:
-				d.Value, d.HasValue = strconv.FormatInt(i.Integer(), 10), true
-			case httpsfv.BareItemTypeString:
-				d.Value, d.HasValue = i.String(), true
-			case httpsfv.BareItemTypeToken:
-				d.Value, d.HasValue = i.Token(), true
-			case httpsfv.BareItemTypeInvalid,
-				httpsfv.BareItemTypeByteSequence,
-				httpsfv.BareItemTypeDate,
-				httpsfv.BareItemTypeDecimal,
-				httpsfv.BareItemTypeDisplayString:
-				if !yield(Directive{}, fmt.Errorf("directive %q has unexpected type %s", k, i.Type())) {
-					return
+				p.dir, found = Directive{Name: name}, true
+
+				name = ""
+			case TokenTypeEquals:
+				p.state = stateValue
+			case TokenTypeSpace:
+				// Do nothing
+			case TokenTypeText:
+				if name != "" && lastToken.Type == TokenTypeSpace {
+					name += lastToken.Text
 				}
 
-				continue
+				name += token.Text
+			case TokenTypeInvalid:
+				panic("unreachable")
 			}
+		case stateValue:
+			switch token.Type {
+			case TokenTypeComma:
+				p.dir, found = Directive{Name: name, Value: value, HasValue: true}, true
 
-			if !yield(d, nil) {
-				return
+				name, value = "", ""
+
+				p.state = stateName
+			case TokenTypeEquals:
+				if value != "" && lastToken.Type == TokenTypeSpace {
+					value += lastToken.Text
+				}
+
+				value += token.Text
+			case TokenTypeSpace:
+				// Do nothing
+			case TokenTypeText:
+				if value != "" && lastToken.Type == TokenTypeSpace {
+					value += lastToken.Text
+				}
+
+				value += token.Text
+			case TokenTypeInvalid:
+				panic("unreachable")
 			}
 		}
+
+		lastToken = token
+	}
+
+	if found {
+		return found
+	}
+
+	if p.state == stateName && name == "" {
+		return false
+	}
+
+	p.dir = Directive{Name: name, Value: value, HasValue: p.state == stateValue}
+	p.state = stateName
+
+	return true
+}
+
+func (p *Parser) nextStructured() bool {
+	if p.iterDone == nil {
+		return false
+	}
+
+	for {
+		k, v, ok := p.iterNext()
+		if !ok {
+			p.iterDone()
+			p.iterDone = nil
+			return false
+		}
+
+		if v.Type() == httpsfv.ItemOrInnerListTypeInnerList {
+			p.dir, p.err = Directive{}, fmt.Errorf("directive %q must be an item", k)
+			return true
+		}
+
+		i := v.Item()
+
+		d := Directive{Name: k}
+
+		switch i.Type() {
+		case httpsfv.BareItemTypeBoolean:
+			if i.Boolean() {
+				break
+			}
+
+			// Treat a false as not being set
+			continue
+		case httpsfv.BareItemTypeInteger:
+			d.Value, d.HasValue = strconv.FormatInt(i.Integer(), 10), true
+		case httpsfv.BareItemTypeString:
+			d.Value, d.HasValue = i.String(), true
+		case httpsfv.BareItemTypeToken:
+			d.Value, d.HasValue = i.Token(), true
+		case httpsfv.BareItemTypeInvalid,
+			httpsfv.BareItemTypeByteSequence,
+			httpsfv.BareItemTypeDate,
+			httpsfv.BareItemTypeDecimal,
+			httpsfv.BareItemTypeDisplayString:
+			p.dir, p.err = Directive{}, fmt.Errorf("directive %q has unexpected type %s", k, i.Type())
+			return true
+		}
+
+		p.dir, p.err = d, nil
+		return true
 	}
 }
 
@@ -232,119 +278,133 @@ func (t TokenType) String() string {
 	panic("invalid TokenType")
 }
 
-// Tokenize takes a string of Cache-Control directives and returns a sequence of tokens.
+// Tokenizer takes a string of Cache-Control directives and returns a sequence of tokens.
 //
 // For quoted strings, it will return a token containing the unquoted, unescaped text.
 //
-// For quoted strings without ending quoted, it will read until the next comma or the end of the string.
-func Tokenize(s string) iter.Seq[Token] {
-	return func(yield func(Token) bool) {
-		textStart := -1
+// For quoted strings without ending quoted, it will read until the next comma or equals sign or the end of the string.
+//
+// This is implemented as a struct with methods and not as iter.Seq in order to avoid allocations.
+type Tokenizer struct {
+	input string
+	off   int
+	tok   Token
+}
 
-	next:
-		for i := 0; i < len(s); i++ {
-			c := s[i]
+// NewTokenizer returns a new Tokenizer for the given string.
+func NewTokenizer(input string) Tokenizer {
+	return Tokenizer{input: input}
+}
 
-			switch {
-			case isControlCharacterOrSpace(c):
-				if textStart != -1 && textStart < i {
-					if !yield(Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}) {
-						return
-					}
+// Next reads the next token.
+//
+// It returns false if no more tokens are available.
+func (t *Tokenizer) Next() bool {
+	var found bool
 
-					textStart = -1
-				}
+	i, s := t.off, t.input
+	textStart := -1
 
-				j := i + 1
+loop:
+	for ; i < len(s) && !found; i++ {
+		c := s[i]
 
-				for j < len(s) {
-					if !isControlCharacterOrSpace(s[j]) {
-						break
-					}
-
-					j++
-				}
-
-				if !yield(Token{Type: TokenTypeSpace, Start: i, End: j, Text: s[i:j]}) {
-					return
-				}
-
-				i = j - 1
-			case c == ',':
-				if textStart != -1 && textStart < i {
-					if !yield(Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}) {
-						return
-					}
-
-					textStart = -1
-				}
-
-				if !yield(Token{Type: TokenTypeComma, Start: i, End: i + 1, Text: ","}) {
-					return
-				}
-			case c == '=':
-				if textStart != -1 && textStart < i {
-					if !yield(Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}) {
-						return
-					}
-
-					textStart = -1
-				}
-
-				if !yield(Token{Type: TokenTypeEquals, Start: i, End: i + 1, Text: "="}) {
-					return
-				}
-			case textStart == -1 && c == '"':
-				var escaping bool
-				var unescaped strings.Builder
-				unescapedTo := i + 1
-
-				for j := i + 1; j < len(s); j++ {
-					switch {
-					case escaping:
-						unescaped.WriteByte(s[j])
-						unescapedTo = j + 1
-
-						escaping = false
-					case s[j] == '\\':
-						if unescapedTo < j {
-							unescaped.WriteString(s[unescapedTo:j])
-							unescapedTo = j + 1
-						}
-
-						escaping = true
-					case s[j] == '"':
-						var text string
-
-						if unescaped.Len() > 0 {
-							unescaped.WriteString(s[unescapedTo:j])
-
-							text = unescaped.String()
-						} else {
-							text = s[i+1 : j]
-						}
-
-						if !yield(Token{Type: TokenTypeText, Start: i, End: j + 1, Text: text}) {
-							return
-						}
-
-						// Will be incremented for the next loop iteration, so no + 1
-						i = j
-
-						continue next
-					}
-				}
-
-				fallthrough
-			case textStart == -1:
-				textStart = i
+		switch {
+		case isControlCharacterOrSpace(c):
+			if textStart != -1 && textStart < i {
+				t.tok, found = Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}, true
+				textStart = -1
+				break loop
 			}
-		}
 
-		if textStart != -1 {
-			yield(Token{Type: TokenTypeText, Start: textStart, End: len(s), Text: s[textStart:]})
+			j := i + 1
+
+			for j < len(s) {
+				if !isControlCharacterOrSpace(s[j]) {
+					break
+				}
+
+				j++
+			}
+
+			t.tok, found = Token{Type: TokenTypeSpace, Start: i, End: j, Text: s[i:j]}, true
+
+			i = j - 1
+		case c == ',':
+			if textStart != -1 && textStart < i {
+				t.tok, found = Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}, true
+				textStart = -1
+				break loop
+			}
+
+			t.tok, found = Token{Type: TokenTypeComma, Start: i, End: i + 1, Text: ","}, true
+		case c == '=':
+			if textStart != -1 && textStart < i {
+				t.tok, found = Token{Type: TokenTypeText, Start: textStart, End: i, Text: s[textStart:i]}, true
+				textStart = -1
+				break loop
+			}
+
+			t.tok, found = Token{Type: TokenTypeEquals, Start: i, End: i + 1, Text: "="}, true
+		case textStart == -1 && c == '"':
+			var escaping bool
+			var unescaped strings.Builder
+			unescapedTo := i + 1
+
+			for j := i + 1; j < len(s); j++ {
+				switch {
+				case escaping:
+					unescaped.WriteByte(s[j])
+					unescapedTo = j + 1
+
+					escaping = false
+				case s[j] == '\\':
+					if unescapedTo < j {
+						unescaped.WriteString(s[unescapedTo:j])
+						unescapedTo = j + 1
+					}
+
+					escaping = true
+				case s[j] == '"':
+					var text string
+
+					if unescaped.Len() > 0 {
+						unescaped.WriteString(s[unescapedTo:j])
+
+						text = unescaped.String()
+					} else {
+						text = s[i+1 : j]
+					}
+
+					t.tok, found = Token{Type: TokenTypeText, Start: i, End: j + 1, Text: text}, true
+
+					// Skip past the closing quote
+					i = j + 1
+
+					break loop
+				}
+			}
+
+			// No closing quote found before end of string, treat the starting quote as normal character
+			fallthrough
+		case textStart == -1:
+			textStart = i
 		}
 	}
+
+	t.off = i
+
+	if !found && textStart != -1 {
+		t.tok = Token{Type: TokenTypeText, Start: textStart, End: len(s), Text: s[textStart:]}
+		found = true
+	}
+
+	return found
+}
+
+// Token returns the last read token.
+func (t *Tokenizer) Token() Token {
+	return t.tok
 }
 
 func isControlCharacterOrSpace(c byte) bool {
