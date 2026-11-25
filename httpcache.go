@@ -30,7 +30,7 @@ type Config struct {
 	// CacheableByExtensionFunc is an optional function that is called when checking if a response can be cached.
 	//
 	// If the function returns true, the response is considered cacheable.
-	CacheableByExtensionFunc func(req RequestData, resp ResponseData) bool
+	CacheableByExtensionFunc func(req *RequestData, resp *ResponseData) bool
 
 	// HeuristicallyCacheableStatusCode is the list of response status codes that are considered cacheable by default.
 	//
@@ -123,7 +123,7 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 // AllowsStoringResponse checks if the given response data can be cached.
 //
 // Note that the response data may not contain a body.
-func (c Config) AllowsStoringResponse(req RequestData, resp ResponseData) bool {
+func (c Config) AllowsStoringResponse(req *RequestData, resp *ResponseData) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:

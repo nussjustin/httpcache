@@ -1,7 +1,6 @@
 package httpcache_test
 
 import (
-	"maps"
 	"math"
 	"net/http"
 	"reflect"
@@ -546,7 +545,7 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 		{
 			name: `cacheable with extension func`,
 			config: httpcache.Config{
-				CacheableByExtensionFunc: func(req httpcache.RequestData, resp httpcache.ResponseData) bool {
+				CacheableByExtensionFunc: func(req *httpcache.RequestData, resp *httpcache.ResponseData) bool {
 					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
 						if ext.Value.Value == "true" {
 							return true
@@ -569,7 +568,7 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 		{
 			name: `non-cacheable with extension func`,
 			config: httpcache.Config{
-				CacheableByExtensionFunc: func(req httpcache.RequestData, resp httpcache.ResponseData) bool {
+				CacheableByExtensionFunc: func(req *httpcache.RequestData, resp *httpcache.ResponseData) bool {
 					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
 						if ext.Value.Value == "true" {
 							return true
@@ -596,20 +595,26 @@ func TestConfig_AllowsStoringResponse(t *testing.T) {
 			public := tt.config
 			public.Private = false
 
-			tt.req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
-			tt.resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
+			req := tt.req.Clone()
+			req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
 
-			if got := public.AllowsStoringResponse(tt.req, tt.resp); got != tt.wantPublic {
+			resp := tt.resp.Clone()
+			resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
+
+			if got := public.AllowsStoringResponse(req, resp); got != tt.wantPublic {
 				t.Errorf("Config{Private: false}.AllowsStoringResponse() = %v, want %v", got, tt.wantPublic)
 			}
 
 			private := tt.config
 			private.Private = true
 
-			tt.req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
-			tt.resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
+			req = tt.req.Clone()
+			req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
 
-			if got := private.AllowsStoringResponse(tt.req, tt.resp); got != tt.wantPrivate {
+			resp = tt.resp.Clone()
+			resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
+
+			if got := private.AllowsStoringResponse(req, resp); got != tt.wantPrivate {
 				t.Errorf("Config{Private: true}.AllowsStoringResponse() = %v, want %v", got, tt.wantPrivate)
 			}
 		})
@@ -995,7 +1000,7 @@ func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := maps.Clone(tt.headers)
+			got := tt.headers.Clone()
 
 			tt.config.RemoveUnstorableHeaders(got)
 

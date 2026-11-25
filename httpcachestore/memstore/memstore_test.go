@@ -88,12 +88,12 @@ func TestMemoryStore_Clear(t *testing.T) {
 
 		baseURL, _ := url.Parse("https://example.com")
 
-		freshReq := httpcache.RequestData{
+		freshReq := &httpcache.RequestData{
 			Time:   time.Now(),
 			Method: "GET",
-			URL:    *baseURL.JoinPath("fresh"),
+			URL:    baseURL.JoinPath("fresh"),
 		}
-		freshResp := httpcache.ResponseData{
+		freshResp := &httpcache.ResponseData{
 			Time:       time.Now(),
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
@@ -104,12 +104,12 @@ func TestMemoryStore_Clear(t *testing.T) {
 			t.Fatalf("failed to store fresh response: %s", err)
 		}
 
-		expiredReq := httpcache.RequestData{
+		expiredReq := &httpcache.RequestData{
 			Time:   time.Now(),
 			Method: "GET",
-			URL:    *baseURL.JoinPath("expired"),
+			URL:    baseURL.JoinPath("expired"),
 		}
-		expiredResp := httpcache.ResponseData{
+		expiredResp := &httpcache.ResponseData{
 			Time:       time.Now(),
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
@@ -158,12 +158,12 @@ func TestMemoryStore_Prune(t *testing.T) {
 
 		baseURL, _ := url.Parse("https://example.com")
 
-		freshReq := httpcache.RequestData{
+		freshReq := &httpcache.RequestData{
 			Time:   time.Now(),
 			Method: "GET",
-			URL:    *baseURL.JoinPath("fresh"),
+			URL:    baseURL.JoinPath("fresh"),
 		}
-		freshResp := httpcache.ResponseData{
+		freshResp := &httpcache.ResponseData{
 			Time:       time.Now(),
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,
@@ -174,12 +174,12 @@ func TestMemoryStore_Prune(t *testing.T) {
 			t.Fatalf("failed to store fresh response: %s", err)
 		}
 
-		expiredReq := httpcache.RequestData{
+		expiredReq := &httpcache.RequestData{
 			Time:   time.Now(),
 			Method: "GET",
-			URL:    *baseURL.JoinPath("expired"),
+			URL:    baseURL.JoinPath("expired"),
 		}
-		expiredResp := httpcache.ResponseData{
+		expiredResp := &httpcache.ResponseData{
 			Time:       time.Now(),
 			Status:     http.StatusText(http.StatusOK),
 			StatusCode: http.StatusOK,

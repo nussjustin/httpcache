@@ -138,11 +138,11 @@ func (m *Store) detail(s string) string {
 	return ""
 }
 
-func (m *Store) key(req httpcache.RequestData) string {
+func (m *Store) key(req *httpcache.RequestData) string {
 	var h maphash.Hash
 	h.SetSeed(seed)
 
-	if _, err := httpcacheutil.HashRequest(&h, req.Method, req.URL, req.Body); err != nil {
+	if _, err := httpcacheutil.HashRequest(&h, req.Method, *req.URL, req.Body); err != nil {
 		panic(fmt.Errorf("HashRequest returned an error: %w", err))
 	}
 
@@ -164,7 +164,7 @@ func (m *Store) Clear() {
 }
 
 // Get implements the [github.com/nussjustin/httpcache.Store.Get] method.
-func (m *Store) Get(_ context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
+func (m *Store) Get(_ context.Context, req *httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	key := m.key(req)
 
 	m.entriesMu.RLock()
@@ -173,7 +173,7 @@ func (m *Store) Get(_ context.Context, req httpcache.RequestData) (resp *httpcac
 	entries := m.entries[key]
 
 	for _, entry := range entries {
-		if !entry.urlVariationConfig.Equals(&entry.req.URL, &req.URL) {
+		if !entry.urlVariationConfig.Equals(entry.req.URL, req.URL) {
 			continue
 		}
 
@@ -279,7 +279,7 @@ func (m *Store) Prune() {
 }
 
 // Set implements the [github.com/nussjustin/httpcache.Store.Set] method.
-func (m *Store) Set(_ context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
+func (m *Store) Set(_ context.Context, req *httpcache.RequestData, resp *httpcache.ResponseData) (detail string, err error) {
 	vary := httpcache.ParseVary(resp.Header["Vary"])
 
 	if vary.Wildcard() {
@@ -304,13 +304,13 @@ func (m *Store) Set(_ context.Context, req httpcache.RequestData, resp httpcache
 
 	key := m.key(req)
 
-	origin, _ := httpcacheutil.OriginFromURL(req.URL)
+	origin, _ := httpcacheutil.OriginFromURL(*req.URL)
 
 	entry := &storeEntry{
 		origin:             origin,
 		groups:             groupsMap,
-		req:                req,
-		resp:               resp,
+		req:                *req.Clone(),
+		resp:               *resp.Clone(),
 		urlVariationConfig: urlVariationConfig,
 		vary:               vary,
 	}

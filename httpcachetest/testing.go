@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
+	"weak"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -39,12 +41,12 @@ func withReqUrl(urlStr string) reqOpt {
 		if err != nil {
 			panic(err)
 		}
-		req.URL = *parsedURL
+		req.URL = parsedURL
 	}
 }
 
-func newReq(opts ...reqOpt) httpcache.RequestData {
-	req := httpcache.RequestData{Header: make(http.Header)}
+func newReq(opts ...reqOpt) *httpcache.RequestData {
+	req := &httpcache.RequestData{Header: make(http.Header)}
 
 	opts = append(
 		[]reqOpt{
@@ -55,7 +57,7 @@ func newReq(opts ...reqOpt) httpcache.RequestData {
 	)
 
 	for _, opt := range opts {
-		opt(&req)
+		opt(req)
 	}
 
 	return req
@@ -82,8 +84,17 @@ func withRespStatus(code int) respOpt {
 	}
 }
 
-func newResp(opts ...respOpt) httpcache.ResponseData {
-	resp := httpcache.ResponseData{Header: make(http.Header), Body: []byte{}}
+func withRespTrailer(name, value string) respOpt {
+	return func(resp *httpcache.ResponseData) {
+		if resp.Trailer == nil {
+			resp.Trailer = http.Header{}
+		}
+		resp.Trailer.Add(name, value)
+	}
+}
+
+func newResp(opts ...respOpt) *httpcache.ResponseData {
+	resp := &httpcache.ResponseData{Header: make(http.Header), Body: []byte{}}
 
 	opts = append(
 		[]respOpt{
@@ -93,7 +104,7 @@ func newResp(opts ...respOpt) httpcache.ResponseData {
 	)
 
 	for _, opt := range opts {
-		opt(&resp)
+		opt(resp)
 	}
 
 	return resp
@@ -132,6 +143,12 @@ type storeOperation interface {
 	do(tb testing.TB, s httpcache.Store)
 }
 
+type doCall func(tb testing.TB, s httpcache.Store)
+
+func (d doCall) do(tb testing.TB, s httpcache.Store) {
+	d(tb, s)
+}
+
 type doGet struct {
 	args       doGetArgs
 	want       doGetWant
@@ -141,7 +158,7 @@ type doGet struct {
 var _ storeOperation = doGet{}
 
 type doGetArgs struct {
-	req httpcache.RequestData
+	req *httpcache.RequestData
 }
 
 type doGetWant struct {
@@ -225,8 +242,8 @@ type doSet struct {
 var _ storeOperation = doSet{}
 
 type doSetArgs struct {
-	req  httpcache.RequestData
-	resp httpcache.ResponseData
+	req  *httpcache.RequestData
+	resp *httpcache.ResponseData
 }
 
 type doSetWant struct {
@@ -305,9 +322,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -332,9 +349,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -359,9 +376,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com:1443/path")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -541,10 +558,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `params=("a")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -593,10 +610,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `except=("b")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -667,10 +684,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=1&b=2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `params=("b")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -719,10 +736,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=1&b=2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `except=("a")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -793,10 +810,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=1")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `params=("b")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -845,10 +862,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?a=1")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", `except=("a")`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -919,10 +936,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path?b=2&a=1")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("No-Vary-Search", "key-order"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -949,9 +966,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqBody(`request body`)),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1009,10 +1026,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqHeader("Header-5", "Ignored")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("Vary", "Header-1, Header-2"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1161,9 +1178,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path-1")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body 1`))),
+							withRespBody(`response body 1`)),
 					},
 				},
 				doGet{
@@ -1173,9 +1190,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path-2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body 2`))),
+							withRespBody(`response body 2`)),
 					},
 				},
 				doInvalidate{
@@ -1197,9 +1214,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path-2")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body 2`))),
+							withRespBody(`response body 2`)),
 					},
 				},
 			},
@@ -1279,9 +1296,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 					timeOffset: -119 * time.Second,
 				},
@@ -1310,9 +1327,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com:443/path")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1338,9 +1355,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/path")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1442,9 +1459,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 								withReqUrl("https://example.com/")),
 						},
 						want: doGetWant{
-							resp: new(newResp(
+							resp: newResp(
 								withRespHeader("Cache-Control", "max-age=120"),
-								withRespBody(`response body`))),
+								withRespBody(`response body`)),
 						},
 						timeOffset: -sleep,
 					},
@@ -1475,9 +1492,9 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 					timeOffset: -sleep,
 				},
@@ -1566,10 +1583,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/c-d")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("Cache-Groups", `"group-c", "group-d"`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1596,10 +1613,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							withReqUrl("https://example.com/a")),
 					},
 					want: doGetWant{
-						resp: new(newResp(
+						resp: newResp(
 							withRespHeader("Cache-Control", "max-age=120"),
 							withRespHeader("Cache-Groups", `"group-a" "group-b"`),
-							withRespBody(`response body`))),
+							withRespBody(`response body`)),
 					},
 				},
 			},
@@ -1656,10 +1673,10 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 								withReqUrl("https://example.com/path?a=1")),
 						},
 						want: doGetWant{
-							resp: new(newResp(
+							resp: newResp(
 								withRespHeader("Cache-Control", "max-age=120"),
 								withRespHeader("No-Vary-Search", "key-order=invalid"),
-								withRespBody(`response body`))),
+								withRespBody(`response body`)),
 						},
 					},
 				},
@@ -1683,6 +1700,108 @@ func TestStore(t *testing.T, cfg TestStoreOpts, f func() httpcache.Store) {
 							req: newReq(
 								withReqMethod("GET"),
 								withReqUrl("https://example.com/path?b=2&a=1")),
+						},
+					},
+				},
+			},
+		}...)
+	}
+
+	{
+		req := newReq(
+			withReqMethod("GET"),
+			withReqUrl("https://example.com/path?a=1&b=2"),
+			withReqBody("request body"))
+
+		resp := newResp(
+			withRespHeader("Cache-Control", "max-age=120"),
+			withRespBody(`response body`),
+			withRespTrailer("Server-Timing", "db;dur=1337"))
+
+		tests = append(tests, []testCase{
+			{
+				name: "set does not retain parameters",
+				ops: []storeOperation{
+					doCall(func(tb testing.TB, s httpcache.Store) {
+						reqClone := req.Clone()
+						reqClonePtr := weak.Make(reqClone)
+
+						respClone := resp.Clone()
+						respClonePtr := weak.Make(respClone)
+
+						doSet{
+							args: doSetArgs{
+								req:  reqClone,
+								resp: respClone,
+							},
+						}.do(tb, s)
+
+						for range 100 {
+							runtime.GC()
+
+							if reqClonePtr.Value() == nil && respClonePtr.Value() == nil {
+								return
+							}
+						}
+
+						if reqClonePtr.Value() != nil {
+							tb.Errorf("Set() retained *RequestData")
+						}
+
+						if respClonePtr.Value() != nil {
+							tb.Errorf("Set() retained *ResponseData")
+						}
+					}),
+					doGet{
+						args: doGetArgs{
+							req: req,
+						},
+						want: doGetWant{
+							resp: resp,
+						},
+					},
+				},
+			},
+			{
+				name: "get does not retain parameters",
+				ops: []storeOperation{
+					doSet{
+						args: doSetArgs{
+							req:  req.Clone(),
+							resp: resp.Clone(),
+						},
+					},
+					doCall(func(tb testing.TB, s httpcache.Store) {
+						reqClone := req.Clone()
+						reqClonePtr := weak.Make(reqClone)
+
+						doGet{
+							args: doGetArgs{
+								req: reqClone,
+							},
+							want: doGetWant{
+								resp: resp.Clone(),
+							},
+						}.do(tb, s)
+
+						for range 100 {
+							runtime.GC()
+
+							if reqClonePtr.Value() == nil {
+								return
+							}
+						}
+
+						if reqClonePtr.Value() != nil {
+							tb.Errorf("Get() retained *RequestData")
+						}
+					}),
+					doGet{
+						args: doGetArgs{
+							req: req,
+						},
+						want: doGetWant{
+							resp: resp,
 						},
 					},
 				},

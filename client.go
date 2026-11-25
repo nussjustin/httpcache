@@ -224,6 +224,9 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 			return nil, Status{}, err
 		}
 
+		// Needed since we must remove unstorable headers
+		respData.Header = respData.Header.Clone()
+
 		c.Config.RemoveUnstorableHeaders(respData.Header)
 
 		if detail, err := c.Store.Set(req.Context(), reqData, respData); err == nil {
@@ -349,10 +352,8 @@ func parseCacheGroups(header http.Header, name string) ([]string, error) {
 type Store interface {
 	// Get returns the stored response matching the given request.
 	//
-	// The client will not modify the returned response, so multiple calls may return the same reference.
-	//
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
-	Get(ctx context.Context, req RequestData) (resp *ResponseData, detail string, err error)
+	Get(ctx context.Context, req *RequestData) (resp *ResponseData, detail string, err error)
 
 	// Invalidate is called when one or more URLs should be invalidated as result of a non-error response to an unsafe
 	// request.
@@ -369,10 +370,12 @@ type Store interface {
 	// Set stores the given response in the cache.
 	//
 	// The returned default parameter, if not empty, is added to the Cache-Status header.
-	Set(ctx context.Context, req RequestData, resp ResponseData) (detail string, err error)
+	Set(ctx context.Context, req *RequestData, resp *ResponseData) (detail string, err error)
 }
 
 // RequestData contains HTTP request data that must be stored and used for lookups by a [Store].
+//
+// Code that receives a RequestData from somewhere else (e.g. from a [Store]) must not modify the object or retain it beyond the scope of the function call.
 type RequestData struct {
 	// Time is the time at which the request was sent.
 	Time time.Time
@@ -381,7 +384,7 @@ type RequestData struct {
 	Method string
 
 	// URL contains the URL the request was sent to.
-	URL url.URL
+	URL *url.URL
 
 	// Header contains the headers sent in the request.
 	//
@@ -398,23 +401,39 @@ type RequestData struct {
 	ParsedDirectives RequestDirectives
 }
 
-func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (RequestData, error) {
+func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (*RequestData, error) {
 	body, err := readBody(&req.Body, int(req.ContentLength))
 	if err != nil {
-		return RequestData{}, err
+		return nil, err
 	}
 
-	return RequestData{
+	return &RequestData{
 		Time:             time.Now(),
 		Method:           cmp.Or(req.Method, "GET"),
-		URL:              *req.URL,
-		Header:           req.Header.Clone(),
+		URL:              req.URL,
+		Header:           req.Header,
 		Body:             body,
 		ParsedDirectives: reqDirectives,
 	}, nil
 }
 
+// Clone returns a deep copy of the RequestData.
+func (r *RequestData) Clone() *RequestData {
+	o := &RequestData{
+		Time:             r.Time,
+		Method:           r.Method,
+		URL:              r.URL.Clone(),
+		Header:           r.Header.Clone(),
+		Body:             slices.Clone(r.Body),
+		ParsedDirectives: r.ParsedDirectives,
+	}
+	o.ParsedDirectives.Extensions = slices.Clone(r.ParsedDirectives.Extensions)
+	return o
+}
+
 // ResponseData contains HTTP response data that must be stored and returned by a [Store].
+//
+// Code that receives a ResponseData from somewhere else (e.g. from a [Store]) must not modify the object or retain it beyond the scope of the function call.
 type ResponseData struct {
 	// Time is the time at which the response was received by the client.
 	Time time.Time
@@ -443,24 +462,39 @@ type ResponseData struct {
 }
 
 // Age returns the responses age based on the Date header, if present, or the Time field otherwise.
-func (s *ResponseData) Age() time.Duration {
-	if date, ok := s.Date(); ok {
+func (r *ResponseData) Age() time.Duration {
+	if date, ok := r.Date(); ok {
 		return time.Since(date)
 	}
 
-	return time.Since(s.Time)
+	return time.Since(r.Time)
 }
 
 // CacheGroups returns the cache groups specified in the Cache-Groups header as specified in RFC 9875.
 //
 // The groups are returned as specified including duplicates.
-func (s *ResponseData) CacheGroups() ([]string, error) {
-	return parseCacheGroups(s.Header, "Cache-Groups")
+func (r *ResponseData) CacheGroups() ([]string, error) {
+	return parseCacheGroups(r.Header, "Cache-Groups")
+}
+
+// Clone returns a deep copy of the RequestData.
+func (r *ResponseData) Clone() *ResponseData {
+	o := &ResponseData{
+		Time:             r.Time,
+		Status:           r.Status,
+		StatusCode:       r.StatusCode,
+		Header:           r.Header.Clone(),
+		Body:             slices.Clone(r.Body),
+		Trailer:          r.Trailer.Clone(),
+		ParsedDirectives: r.ParsedDirectives,
+	}
+	o.ParsedDirectives.Extensions = slices.Clone(r.ParsedDirectives.Extensions)
+	return o
 }
 
 // Date returns the parsed Date header.
-func (s *ResponseData) Date() (date time.Time, ok bool) {
-	dates := s.Header.Values("Date")
+func (r *ResponseData) Date() (date time.Time, ok bool) {
+	dates := r.Header.Values("Date")
 	if len(dates) != 1 {
 		return time.Time{}, false
 	}
@@ -473,37 +507,37 @@ func (s *ResponseData) Date() (date time.Time, ok bool) {
 	return date, true
 }
 
-func (s *ResponseData) restore(req *http.Request) *http.Response {
-	header := s.Header.Clone()
-	header.Set("Age", strconv.Itoa(int(s.Age().Seconds())))
+func (r *ResponseData) restore(req *http.Request) *http.Response {
+	header := r.Header.Clone()
+	header.Set("Age", strconv.Itoa(int(r.Age().Seconds())))
 
 	var body io.ReadCloser
 
-	if s.Body != nil {
-		body = io.NopCloser(bytes.NewReader(s.Body))
+	if r.Body != nil {
+		body = io.NopCloser(bytes.NewReader(r.Body))
 	}
 
 	return &http.Response{
-		Status:        s.Status,
-		StatusCode:    s.StatusCode,
+		Status:        r.Status,
+		StatusCode:    r.StatusCode,
 		Proto:         req.Proto,
 		ProtoMajor:    req.ProtoMajor,
 		ProtoMinor:    req.ProtoMinor,
 		Header:        header,
 		Body:          body,
-		ContentLength: int64(len(s.Body)),
-		Trailer:       s.Trailer.Clone(),
+		ContentLength: int64(len(r.Body)),
+		Trailer:       r.Trailer.Clone(),
 		Request:       req,
 	}
 }
 
-func responseDataFromResponseWithoutBody(resp *http.Response, respDirectives ResponseDirectives) ResponseData {
-	return ResponseData{
+func responseDataFromResponseWithoutBody(resp *http.Response, respDirectives ResponseDirectives) *ResponseData {
+	return &ResponseData{
 		Time:             time.Now(),
 		Status:           resp.Status,
 		StatusCode:       resp.StatusCode,
-		Header:           resp.Header.Clone(),
-		Trailer:          resp.Trailer.Clone(),
+		Header:           resp.Header,
+		Trailer:          resp.Trailer,
 		ParsedDirectives: respDirectives,
 	}
 }

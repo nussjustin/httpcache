@@ -13,6 +13,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -62,7 +63,7 @@ type testStore struct {
 
 var errStoreFail = errors.New("fail on store")
 
-func (t *testStore) Get(ctx context.Context, req httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
+func (t *testStore) Get(ctx context.Context, req *httpcache.RequestData) (resp *httpcache.ResponseData, detail string, err error) {
 	if t.failOnGet {
 		return nil, "fail-on-get", errStoreFail
 	}
@@ -87,7 +88,7 @@ func (t *testStore) InvalidateGroups(ctx context.Context, groups ...string) erro
 	return t.wrapped.InvalidateGroups(ctx, groups...)
 }
 
-func (t *testStore) Set(ctx context.Context, req httpcache.RequestData, resp httpcache.ResponseData) (detail string, err error) {
+func (t *testStore) Set(ctx context.Context, req *httpcache.RequestData, resp *httpcache.ResponseData) (detail string, err error) {
 	t.stored++
 	if t.failOnStore {
 		return "fail-on-store", errStoreFail
@@ -1586,7 +1587,7 @@ type dummyStore struct {
 
 var _ httpcache.Store = (*dummyStore)(nil)
 
-func (s *dummyStore) Get(_ context.Context, _ httpcache.RequestData) (*httpcache.ResponseData, string, error) {
+func (s *dummyStore) Get(_ context.Context, _ *httpcache.RequestData) (*httpcache.ResponseData, string, error) {
 	return s.resp, "", nil
 }
 
@@ -1598,7 +1599,7 @@ func (s *dummyStore) InvalidateGroups(_ context.Context, _ ...string) error {
 	return nil
 }
 
-func (s *dummyStore) Set(_ context.Context, _ httpcache.RequestData, _ httpcache.ResponseData) (string, error) {
+func (s *dummyStore) Set(_ context.Context, _ *httpcache.RequestData, _ *httpcache.ResponseData) (string, error) {
 	return "", nil
 }
 
@@ -1761,6 +1762,62 @@ func BenchmarkClient_Do(b *testing.B) {
 	})
 }
 
+func mapsIdentical[MX, MY ~map[K]V, K comparable, V any](x MX, y MY) bool {
+	// Maps in Go are references yet the core language
+	// provides no safe way to ask whether they alias.
+	type pointer = unsafe.Pointer
+	return *(*pointer)(pointer(&x)) == *(*pointer)(pointer(&y))
+}
+
+func slicesIdentical[S ~[]V, V any](x S, y S) bool {
+	return unsafe.SliceData(x) == unsafe.SliceData(y)
+}
+
+func TestRequestData_Clone(t *testing.T) {
+	orig := &httpcache.RequestData{
+		Time:   time.Now(),
+		Method: "GET",
+		URL:    &url.URL{Scheme: "https", Host: "example.com", Path: "/", RawQuery: "a=1&b=2"},
+		Header: http.Header{
+			"Header-1": []string{"Value-1"},
+			"Header-2": []string{"Value-2", "Value-3"},
+		},
+		Body: []byte("request body"),
+		ParsedDirectives: httpcache.RequestDirectives{
+			NoCache: true,
+			NoStore: true,
+			Extensions: httpcache.ExtensionDirectives{
+				{Name: "Extension-1"},
+				{Name: "Extension-2", Value: httpcache.Opt[string]{Value: "Value", Valid: true}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+
+	if diff := cmp.Diff(orig, cloned); diff != "" {
+		t.Errorf("RequestData.Clone() mismatch (-want +got):\n%s", diff)
+	}
+
+	if orig.URL == cloned.URL {
+		t.Errorf("RequestData.Clone() returned same *url.URL")
+	}
+
+	if mapsIdentical(orig.Header, cloned.Header) {
+		t.Errorf("RequestData.Clone() returned same Header map")
+	}
+
+	for k := range orig.Header {
+		if got, want := orig.Header[k], cloned.Header[k]; slicesIdentical(got, want) {
+			t.Errorf("RequestData.Clone() returned same Header %q slice", k)
+		}
+	}
+
+	if slicesIdentical(orig.ParsedDirectives.Extensions, cloned.ParsedDirectives.Extensions) {
+		t.Errorf("RequestData.Clone() returned same ExtensionDirectives slice")
+	}
+}
+
 func TestResponseData_Age(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1886,6 +1943,61 @@ func TestResponseData_CacheGroups(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestResponseData_Clone(t *testing.T) {
+	orig := &httpcache.ResponseData{
+		Time:       time.Now(),
+		Status:     "Some status",
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Header-1": []string{"Value-1"},
+			"Header-2": []string{"Value-2", "Value-3"},
+		},
+		Body: []byte("request body"),
+		Trailer: http.Header{
+			"Trailer-1": []string{"Value-4"},
+			"Trailer-2": []string{"Value-5", "Value-6"},
+		},
+		ParsedDirectives: httpcache.ResponseDirectives{
+			NoCache: true,
+			NoStore: true,
+			Extensions: httpcache.ExtensionDirectives{
+				{Name: "Extension-1"},
+				{Name: "Extension-2", Value: httpcache.Opt[string]{Value: "Value", Valid: true}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+
+	if diff := cmp.Diff(orig, cloned); diff != "" {
+		t.Errorf("ResponseData.Clone() mismatch (-want +got):\n%s", diff)
+	}
+
+	if mapsIdentical(orig.Header, cloned.Header) {
+		t.Errorf("ResponseData.Clone() returned same Header map")
+	}
+
+	for k := range orig.Header {
+		if got, want := orig.Header[k], cloned.Header[k]; slicesIdentical(got, want) {
+			t.Errorf("ResponseData.Clone() returned same Header %q slice", k)
+		}
+	}
+
+	if mapsIdentical(orig.Trailer, cloned.Trailer) {
+		t.Errorf("ResponseData.Clone() returned same Trailer map")
+	}
+
+	for k := range orig.Trailer {
+		if got, want := orig.Trailer[k], cloned.Trailer[k]; slicesIdentical(got, want) {
+			t.Errorf("ResponseData.Clone() returned same Trailer %q slice", k)
+		}
+	}
+
+	if slicesIdentical(orig.ParsedDirectives.Extensions, cloned.ParsedDirectives.Extensions) {
+		t.Errorf("ResponseData.Clone() returned same ExtensionDirectives slice")
 	}
 }
 
