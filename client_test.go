@@ -1,6 +1,7 @@
 package httpcache_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -1397,6 +1398,85 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Cache-Group-Invalidation", `"valid-1", invalid, "valid-2"`),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		// Tests for read optimizations
+		{
+			name: "body from bytes.Buffer",
+			txs: []transaction{
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(bytes.NewBufferString("request body"))),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(bytes.NewBufferString("response body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(bytes.NewBufferString("request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(bytes.NewBufferString("response body")),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "body from bytes.Reader",
+			txs: []transaction{
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(bytes.NewReader([]byte("request body")))),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(bytes.NewReader([]byte("response body")))),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(bytes.NewReader([]byte("request body")))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(bytes.NewReader([]byte("response body"))),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "body from strings.Reader",
+			txs: []transaction{
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("request body"))),
+					resp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(strings.NewReader("response body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=120"),
+						withRespBody(strings.NewReader("response body")),
 						withRespHeader("Transaction-Id", "0")),
 				},
 			},

@@ -6,8 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -217,7 +220,7 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 	respData := responseDataFromResponseWithoutBody(resp, respDirectives)
 
 	if c.Config.AllowsStoringResponse(reqData, respData) {
-		if respData.Body, err = readBody(resp); err != nil {
+		if respData.Body, err = readBody(&resp.Body, int(resp.ContentLength)); err != nil {
 			return nil, Status{}, err
 		}
 
@@ -396,7 +399,7 @@ type RequestData struct {
 }
 
 func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (RequestData, error) {
-	body, err := readBody(req)
+	body, err := readBody(&req.Body, int(req.ContentLength))
 	if err != nil {
 		return RequestData{}, err
 	}
@@ -505,34 +508,103 @@ func responseDataFromResponseWithoutBody(resp *http.Response, respDirectives Res
 	}
 }
 
-func readBody[T http.Request | http.Response](t *T) (body []byte, err error) {
-	var reader io.ReadCloser
-
-	switch x := any(t).(type) {
-	case *http.Request:
-		reader = x.Body
-	case *http.Response:
-		reader = x.Body
-	}
-
-	if reader == nil {
+func readBody(rc *io.ReadCloser, size int) (body []byte, err error) {
+	if *rc == nil {
 		return nil, nil
 	}
 
-	defer func() {
-		switch x := any(t).(type) {
-		case *http.Request:
-			x.ContentLength = int64(len(body))
-			x.Body = io.NopCloser(bytes.NewReader(body))
-		case *http.Response:
-			x.ContentLength = int64(len(body))
-			x.Body = io.NopCloser(bytes.NewReader(body))
+	r := unwrapReader(*rc)
+
+	switch x := r.(type) {
+	case *bytes.Buffer:
+		return slices.Clone(x.Bytes()), nil
+	case *bytes.Reader:
+		body = make([]byte, x.Len())
+
+		if _, err = io.ReadFull(x, body); err != nil {
+			panic("unreachable")
 		}
 
-		if cerr := reader.Close(); cerr != nil && err == nil {
-			err = cerr
+		if _, err := x.Seek(-int64(len(body)), io.SeekCurrent); err != nil {
+			panic("unreachable")
 		}
-	}()
 
-	return io.ReadAll(reader)
+		return body, nil
+	case *strings.Reader:
+		body = make([]byte, x.Len())
+
+		if _, err = io.ReadFull(x, body); err != nil {
+			panic("unreachable")
+		}
+
+		if _, err := x.Seek(-int64(len(body)), io.SeekCurrent); err != nil {
+			panic("unreachable")
+		}
+
+		return body, nil
+	}
+
+	if size > 0 && size < math.MaxInt {
+		body, err = readAllN(r, size)
+	} else {
+		body, err = io.ReadAll(r)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	*rc = io.NopCloser(bytes.NewReader(body))
+
+	return body, nil
+}
+
+func readAllN(r io.Reader, rn int) ([]byte, error) {
+	buf := make([]byte, rn+1)
+
+	var n int
+	var err error
+
+	for n < rn && err == nil {
+		var nn int
+		nn, err = r.Read(buf[n:])
+		n += nn
+	}
+
+	if err == io.EOF {
+		err = nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if n < rn {
+		return nil, fmt.Errorf("read too few bytes: got %d, want %d", n, rn)
+	}
+
+	if n > rn+1 {
+		return nil, fmt.Errorf("read too many bytes: got %d, want %d", n, rn)
+	}
+
+	return buf, nil
+}
+
+func unwrapReader(rc io.ReadCloser) io.Reader {
+	var r io.Reader = rc
+
+	for {
+		v := reflect.ValueOf(r)
+
+		t := v.Type()
+
+		if t.PkgPath() != "io" {
+			return r
+		}
+
+		if n := t.Name(); n != "nopCloser" && n != "nopCloserWriterTo" {
+			return r
+		}
+
+		r = v.Field(0).Interface().(io.Reader)
+	}
 }
