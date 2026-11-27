@@ -3,10 +3,13 @@ package httpcache_test
 import (
 	"math"
 	"net/http"
+	"net/url"
 	"reflect"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
+	"unsafe"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/nussjustin/httpsfv"
@@ -14,1029 +17,15 @@ import (
 	"github.com/nussjustin/httpcache"
 )
 
-func TestConfig_AllowsStoringResponse(t *testing.T) {
-	tests := []struct {
-		name        string
-		config      httpcache.Config
-		req         httpcache.RequestData
-		resp        httpcache.ResponseData
-		wantPublic  bool
-		wantPrivate bool
-	}{
-		{
-			name:   `simple GET`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `simple HEAD`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "HEAD"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `simple QUERY`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "QUERY"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `unsupported request method`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "POST"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `request method supported by custom method list`,
-			config: httpcache.Config{
-				SupportedRequestMethods: []string{"POST"},
-			},
-			req: httpcache.RequestData{Method: "POST"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `request method not supported by custom method list`,
-			config: httpcache.Config{
-				SupportedRequestMethods: []string{"POST"},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `invalid status code`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusContinue,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `status code 206, empty config`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusPartialContent,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `status code 206, understood`,
-			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusPartialContent},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusPartialContent,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `status code 206, not understood`,
-			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusNotModified},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusPartialContent,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name: `status code 304, empty config`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusNotModified,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `status code 304, understood`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
-				UnderstoodResponseCodes:          []int{http.StatusNotModified},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusNotModified,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `status code 304, not understood`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{http.StatusNotModified},
-				UnderstoodResponseCodes:          []int{http.StatusPartialContent},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusNotModified,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `must-understand, empty config`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"must-understand"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `must-understand, understood`,
-			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusOK},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"must-understand"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `must-understand, not understood`,
-			config: httpcache.Config{
-				UnderstoodResponseCodes: []int{http.StatusNotModified, http.StatusPartialContent},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"must-understand"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `no-store`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"no-store"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `private`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"private"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: true,
-		},
-		{
-			name:   `private, with headers`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"private=header"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: true,
-		},
-		{
-			name:   `private, with headers, RespectResponseDirectivePrivateValue set`,
-			config: httpcache.Config{RespectResponseDirectivePrivateValue: true},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"private=header"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `authorized`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Authorization": []string{"Bearer test"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  false,
-			wantPrivate: true,
-		},
-		{
-			name:   `authorized, must-revalidate`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Authorization": []string{"Bearer test"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"must-revalidate"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `authorized, public`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Authorization": []string{"Bearer test"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"public"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `authorized, s-max-age > 0`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Authorization": []string{"Bearer test"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"s-maxage=5"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `authorized, s-max-age == 0`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Authorization": []string{"Bearer test"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"s-maxage=0"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `non-heuristically cacheable status`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusCreated,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `heuristically cacheable status by custom list`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusCreated,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `non-heuristically cacheable status by custom list`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{http.StatusCreated},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `public`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"public"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `private`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"private"},
-				},
-			},
-			wantPublic:  false,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `expires`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Expires": []string{"Mon, 02 Jan 2007 15:04:05 GMT"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `multiple expires`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Expires": []string{
-						"Mon, 02 Jan 2007 15:04:05 GMT",
-						// Only first should be considered
-						"Mon, 03 Jan 2007 15:04:05 INVALID",
-					},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name:   `max-age > 0`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=5"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `max-age == 0`,
-			config: httpcache.Config{},
-			req:    httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"max-age=0"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-
-		{
-			name: `s-maxage > 0`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"s-maxage=5"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: false,
-		},
-		{
-			name: `s-maxage == 0`,
-			config: httpcache.Config{
-				HeuristicallyCacheableStatusCode: []int{},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-				Header: http.Header{
-					"Cache-Control": []string{"s-maxage=0"},
-				},
-			},
-			wantPublic:  true,
-			wantPrivate: false,
-		},
-
-		{
-			name:   `request no-store`,
-			config: httpcache.Config{},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Cache-Control": []string{"no-store"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name:   `request no-store, RespectRequestDirectiveNoStore set`,
-			config: httpcache.Config{RespectRequestDirectiveNoStore: true},
-			req: httpcache.RequestData{
-				Method: "GET",
-				Header: http.Header{
-					"Cache-Control": []string{"no-store"},
-				},
-			},
-			resp: httpcache.ResponseData{
-				StatusCode: http.StatusOK,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-		{
-			name: `cacheable with extension func`,
-			config: httpcache.Config{
-				CacheableByExtensionFunc: func(req *httpcache.RequestData, resp *httpcache.ResponseData) bool {
-					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
-						if ext.Value.Value == "true" {
-							return true
-						}
-					}
-
-					return false
-				},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				Header: http.Header{
-					"Cache-Control": []string{"custom-directive=true"},
-				},
-				StatusCode: http.StatusInternalServerError,
-			},
-			wantPublic:  true,
-			wantPrivate: true,
-		},
-		{
-			name: `non-cacheable with extension func`,
-			config: httpcache.Config{
-				CacheableByExtensionFunc: func(req *httpcache.RequestData, resp *httpcache.ResponseData) bool {
-					for ext := range resp.ParsedDirectives.Extensions.Named("custom-directive") {
-						if ext.Value.Value == "true" {
-							return true
-						}
-					}
-
-					return false
-				},
-			},
-			req: httpcache.RequestData{Method: "GET"},
-			resp: httpcache.ResponseData{
-				Header: http.Header{
-					"Cache-Control": []string{"custom-directive=false"},
-				},
-				StatusCode: http.StatusInternalServerError,
-			},
-			wantPublic:  false,
-			wantPrivate: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			public := tt.config
-			public.Private = false
-
-			req := tt.req.Clone()
-			req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
-
-			resp := tt.resp.Clone()
-			resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
-
-			if got := public.AllowsStoringResponse(req, resp); got != tt.wantPublic {
-				t.Errorf("Config{Private: false}.AllowsStoringResponse() = %v, want %v", got, tt.wantPublic)
-			}
-
-			private := tt.config
-			private.Private = true
-
-			req = tt.req.Clone()
-			req.ParsedDirectives, _ = tt.config.ParseRequestDirectives(tt.req.Header)
-
-			resp = tt.resp.Clone()
-			resp.ParsedDirectives, _ = tt.config.ParseResponseDirectives(tt.resp.Header)
-
-			if got := private.AllowsStoringResponse(req, resp); got != tt.wantPrivate {
-				t.Errorf("Config{Private: true}.AllowsStoringResponse() = %v, want %v", got, tt.wantPrivate)
-			}
-		})
-	}
+func mapsIdentical[MX, MY ~map[K]V, K comparable, V any](x MX, y MY) bool {
+	// Maps in Go are references yet the core language
+	// provides no safe way to ask whether they alias.
+	type pointer = unsafe.Pointer
+	return *(*pointer)(pointer(&x)) == *(*pointer)(pointer(&y))
 }
 
-func TestConfig_IsSafeMethod(t *testing.T) {
-	tests := []struct {
-		name   string
-		config httpcache.Config
-		method string
-		want   bool
-	}{
-		{
-			name:   "default logic, GET",
-			method: "GET",
-			want:   true,
-		},
-		{
-			name:   "default logic, HEAD",
-			method: "HEAD",
-			want:   true,
-		},
-		{
-			name:   "default logic, OPTIONS",
-			method: "OPTIONS",
-			want:   true,
-		},
-		{
-			name:   "default logic, POST",
-			method: "POST",
-		},
-		{
-			name:   "default logic, PUT",
-			method: "PUT",
-		},
-		{
-			name:   "default logic, QUERY",
-			method: "QUERY",
-			want:   true,
-		},
-		{
-			name:   "default logic, SEARCH",
-			method: "SEARCH",
-		},
-		{
-			name:   "default logic, TRACE",
-			method: "TRACE",
-			want:   true,
-		},
-		{
-			name:   "default logic, lowercase GET",
-			method: "get",
-			want:   true,
-		},
-		{
-			name:   "default logic, lowercase POST",
-			method: "post",
-		},
-		{
-			name: "custom logic, unsafe GET",
-			config: httpcache.Config{IsSafeMethodFunc: func(method string) bool {
-				return method != "GET"
-			}},
-			method: "GET",
-		},
-		{
-			name: "custom logic, safe POST",
-			config: httpcache.Config{IsSafeMethodFunc: func(method string) bool {
-				return method == "POST"
-			}},
-			method: "POST",
-			want:   true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.config.IsSafeMethod(tt.method)
-
-			if got != tt.want {
-				t.Errorf("Config.IsSafeMethod() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestConfig_ParseRequestDirectives(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  httpcache.Config
-		headers http.Header
-		want    httpcache.RequestDirectives
-	}{
-		{
-			name:   "no targeted, no header",
-			config: httpcache.Config{},
-		},
-		{
-			name:   "no targeted, cache-control header set",
-			config: httpcache.Config{},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, all targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{"no-store"},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, one targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, no targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, no targeted set, cache-control header not set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{},
-			want:    httpcache.RequestDirectives{},
-		},
-		{
-			name: "targeted, first targeted invalid, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{","},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, all targeted invalid, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{","},
-				"Target-2":      []string{"="},
-			},
-			want: httpcache.RequestDirectives{NoCache: true},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.config.ParseRequestDirectives(tt.headers)
-			if err != nil {
-				t.Fatalf("Config.ParseResponseDirectives() error = %v, want nil", err)
-			}
-
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Config.ParseResponseDirectives() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestConfig_ParseResponseDirectives(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  httpcache.Config
-		headers http.Header
-		want    httpcache.ResponseDirectives
-	}{
-		{
-			name:   "no targeted, no header",
-			config: httpcache.Config{},
-		},
-		{
-			name:   "no targeted, cache-control header set",
-			config: httpcache.Config{},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-			},
-			want: httpcache.ResponseDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, all targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{"no-store"},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.ResponseDirectives{NoStore: true},
-		},
-		{
-			name: "targeted, one targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.ResponseDirectives{NoTransform: true},
-		},
-		{
-			name: "targeted, no targeted set, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-			},
-			want: httpcache.ResponseDirectives{NoCache: true},
-		},
-		{
-			name: "targeted, no targeted set, cache-control header not set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{},
-			want:    httpcache.ResponseDirectives{},
-		},
-		{
-			name: "targeted, first targeted invalid, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{","},
-				"Target-2":      []string{"no-transform"},
-			},
-			want: httpcache.ResponseDirectives{NoTransform: true},
-		},
-		{
-			name: "targeted, all targeted invalid, cache-control header set",
-			config: httpcache.Config{
-				TargetList: []string{"Target-1", "Target-2"},
-			},
-			headers: http.Header{
-				"Cache-Control": []string{"no-cache"},
-				"Target-1":      []string{","},
-				"Target-2":      []string{"="},
-			},
-			want: httpcache.ResponseDirectives{NoCache: true},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.config.ParseResponseDirectives(tt.headers)
-			if err != nil {
-				t.Fatalf("Config.ParseResponseDirectives() error = %v, want nil", err)
-			}
-
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Config.ParseResponseDirectives() mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestConfig_RemoveUnstorableHeaders(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  httpcache.Config
-		headers http.Header
-		want    http.Header
-	}{
-		{
-			name:   `default`,
-			config: httpcache.Config{},
-			headers: http.Header{
-				"Age":                       {`10`},
-				"Cache-Control":             {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Connection":                {"close", "age", "Content-Encoding"},
-				"Content-Encoding":          {`gzip`},
-				"Content-Length":            {`128`},
-				"Content-Type":              {`text/plain; charset=utf-8`},
-				"Date":                      {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Extra-Header-1":            {`Extra value 1`, "Extra value 2"},
-				"Extra-Header-2":            {`Extra value 3`, "Extra value 4"},
-				"Expires":                   {`Mon, 02 Jan 2007 15:04:05 GMT`},
-				"Proxy-Authenticate":        {`Basic realm="Dev", charset="UTF-8"`},
-				"Proxy-Authentication-Info": {`Test`},
-				"Proxy-Authorization":       {`Basic YWxhZGRpbjpvcGVuc2VzYW1l`},
-			},
-			want: http.Header{
-				"Cache-Control":  {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Content-Length": {`128`},
-				"Content-Type":   {`text/plain; charset=utf-8`},
-				"Date":           {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Extra-Header-1": {`Extra value 1`, "Extra value 2"},
-				"Extra-Header-2": {`Extra value 3`, "Extra value 4"},
-				"Expires":        {`Mon, 02 Jan 2007 15:04:05 GMT`},
-			},
-		},
-
-		{
-			name:   `RespectResponseDirectivePrivateValue set`,
-			config: httpcache.Config{RespectResponseDirectivePrivateValue: true},
-			headers: http.Header{
-				"Age":                       {`10`},
-				"Cache-Control":             {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Connection":                {"close", "age", "Content-Encoding"},
-				"Content-Encoding":          {`gzip`},
-				"Content-Length":            {`128`},
-				"Content-Type":              {`text/plain; charset=utf-8`},
-				"Date":                      {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Expires":                   {`Mon, 02 Jan 2007 15:04:05 GMT`},
-				"Extra-Header-1":            {`Extra value 1`, "Extra value 2"},
-				"Extra-Header-2":            {`Extra value 3`, "Extra value 4"},
-				"Proxy-Authenticate":        {`Basic realm="Dev", charset="UTF-8"`},
-				"Proxy-Authentication-Info": {`Test`},
-				"Proxy-Authorization":       {`Basic YWxhZGRpbjpvcGVuc2VzYW1l`},
-			},
-			want: http.Header{
-				"Cache-Control":  {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Content-Length": {`128`},
-				"Content-Type":   {`text/plain; charset=utf-8`},
-				"Date":           {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Expires":        {`Mon, 02 Jan 2007 15:04:05 GMT`},
-			},
-		},
-
-		{
-			name:   `StoreProxyHeaders set`,
-			config: httpcache.Config{StoreProxyHeaders: true},
-			headers: http.Header{
-				"Age":                       {`10`},
-				"Cache-Control":             {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Content-Encoding":          {`gzip`},
-				"Content-Length":            {`128`},
-				"Content-Type":              {`text/plain; charset=utf-8`},
-				"Connection":                {"close", "age", "Content-Encoding"},
-				"Date":                      {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Extra-Header-1":            {`Extra value 1`, "Extra value 2"},
-				"Extra-Header-2":            {`Extra value 3`, "Extra value 4"},
-				"Expires":                   {`Mon, 02 Jan 2007 15:04:05 GMT`},
-				"Proxy-Authenticate":        {`Basic realm="Dev", charset="UTF-8"`},
-				"Proxy-Authentication-Info": {`Test`},
-				"Proxy-Authorization":       {`Basic YWxhZGRpbjpvcGVuc2VzYW1l`},
-			},
-			want: http.Header{
-				"Cache-Control":             {`max-age=0, private="Extra-Header-1 extra-header-2"`},
-				"Content-Length":            {`128`},
-				"Content-Type":              {`text/plain; charset=utf-8`},
-				"Date":                      {`Mon, 02 Jan 2006 15:04:05 GMT`},
-				"Expires":                   {`Mon, 02 Jan 2007 15:04:05 GMT`},
-				"Extra-Header-1":            {`Extra value 1`, "Extra value 2"},
-				"Extra-Header-2":            {`Extra value 3`, "Extra value 4"},
-				"Proxy-Authenticate":        {`Basic realm="Dev", charset="UTF-8"`},
-				"Proxy-Authentication-Info": {`Test`},
-				"Proxy-Authorization":       {`Basic YWxhZGRpbjpvcGVuc2VzYW1l`},
-			},
-		},
-	}
-
-	run := func(t *testing.T, copyOnChange bool) {
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				input := tt.headers.Clone()
-
-				got := tt.config.RemoveUnstorableHeaders(input, copyOnChange)
-
-				if diff := cmp.Diff(tt.want, got); diff != "" {
-					t.Errorf("Config.RemoveUnstorableHeaders() mismatch (-want +got):\n%s", diff)
-				}
-
-				if copyOnChange {
-					if !headerEqual(input, tt.headers) {
-						t.Errorf("Config.RemoveUnstorableHeaders() modified original map")
-					}
-
-					if headerEqual(got, input) {
-						if !mapsIdentical(got, input) {
-							t.Error("Config.RemoveUnstorableHeaders() returned new map even though the map was not changed")
-						}
-					} else {
-						if mapsIdentical(got, input) {
-							t.Error("Config.RemoveUnstorableHeaders() returned same map even though map was changed")
-						}
-					}
-				} else if !mapsIdentical(got, input) {
-					t.Error("Config.RemoveUnstorableHeaders() returned new map")
-				}
-			})
-		}
-	}
-
-	t.Run("copy", func(t *testing.T) {
-		run(t, true)
-	})
-
-	t.Run("no copy", func(t *testing.T) {
-		run(t, false)
-	})
+func slicesIdentical[S ~[]V, V any](x S, y S) bool {
+	return unsafe.SliceData(x) == unsafe.SliceData(y)
 }
 
 func TestParseAge(t *testing.T) {
@@ -1147,327 +136,6 @@ func TestParseExpires(t *testing.T) {
 	}
 }
 
-func TestParseVary(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []string
-		want httpcache.Vary
-	}{
-		{
-			name: `no values`,
-		},
-		{
-			name: `empty slice`,
-			in:   []string{},
-		},
-		{
-			name: `single header`,
-			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 "},
-			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `single header with duplicates`,
-			in:   []string{" header-3, HEADER-1 ,Header-2 , HeAdEr-4 , Header-1, Header-3"},
-			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `multiple headers`,
-			in:   []string{" header-3, HEADER-1", "Header-2 , HeAdEr-4"},
-			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-		{
-			name: `multiple headers with duplicates`,
-			in:   []string{" header-3, HEADER-1 ,Header-2", "HeAdEr-4 , Header-1, Header-3"},
-			want: httpcache.Vary{"Header-1", "Header-2", "Header-3", "Header-4"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := httpcache.ParseVary(tt.in)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Response.Vary() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestVary_Equals(t *testing.T) {
-	type args struct {
-		vary httpcache.Vary
-		h1   http.Header
-		h2   http.Header
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			name: "empty",
-			want: true,
-		},
-		{
-			name: "matching",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					"Header-1":     []string{"Header-1-Value-1"},
-					"Header-2":     []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Extra-Header": []string{"Extra-Header-Value-1"},
-				},
-			},
-			want: true,
-		},
-		{
-			name: "different contents",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					// First character in value has lower case
-					"Header-1": []string{"header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-			},
-		},
-		{
-			name: "missing header",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-				},
-			},
-		},
-		{
-			name: "missing header value",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-2"},
-				},
-			},
-		},
-		{
-			name: "missing empty header value",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					// Second value is empty
-					"Header-2": []string{"Header-2-Value-1", ""},
-				},
-				h2: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-2"},
-				},
-			},
-		},
-		{
-			name: "wrong header value order",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-2", "Header-2-Value-1"},
-				},
-			},
-		},
-		{
-			name: "too many values",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				h1: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-				},
-				h2: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2", "Header-2-Value-2"},
-				},
-			},
-		},
-
-		{
-			name: "wildcard",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2", "*"},
-			},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.args.vary.Equals(tt.args.h1, tt.args.h2)
-			if got != tt.want {
-				t.Errorf("Vary.Equals() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestVary_Take(t *testing.T) {
-	type args struct {
-		vary   httpcache.Vary
-		header http.Header
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    http.Header
-		wantNil bool
-	}{
-		{
-			name: "empty",
-			args: args{
-				header: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": []string{"Header-3-Value-1"},
-				},
-			},
-			want:    nil,
-			wantNil: true,
-		},
-		{
-			name: "all found",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2"},
-				header: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": []string{"Header-3-Value-1"},
-				},
-			},
-			want: http.Header{
-				"Header-1": []string{"Header-1-Value-1"},
-				"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-			},
-		},
-		{
-			name: "some found",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-4"},
-				header: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": []string{"Header-3-Value-1"},
-				},
-			},
-			want: http.Header{
-				"Header-1": []string{"Header-1-Value-1"},
-			},
-		},
-		{
-			name: "none found",
-			args: args{
-				vary: httpcache.Vary{"Header-4"},
-				header: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": []string{"Header-3-Value-1"},
-				},
-			},
-			want: http.Header{},
-		},
-
-		{
-			name: "wildcard",
-			args: args{
-				vary: httpcache.Vary{"Header-1", "header-2", "*"},
-				header: http.Header{
-					"Header-1": []string{"Header-1-Value-1"},
-					"Header-2": []string{"Header-2-Value-1", "Header-2-Value-2"},
-					"Header-3": []string{"Header-3-Value-1"},
-				},
-			},
-			want:    nil,
-			wantNil: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.args.vary.Take(tt.args.header)
-			if (got == nil) != tt.wantNil {
-				t.Errorf("Vary.Take() got = %v, want nil", got)
-			}
-			if !headerEqual(got, tt.want) {
-				t.Errorf("Vary.Take() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestVary_Wildcard(t *testing.T) {
-	tests := []struct {
-		name string
-		in   httpcache.Vary
-		want bool
-	}{
-		{
-			name: `empty`,
-		},
-		{
-			name: `single non-wildcard`,
-			in:   httpcache.Vary{"Header-1"},
-		},
-		{
-			name: `multiple non-wildcards`,
-			in:   httpcache.Vary{"Header-1", "Header-2", "Header-3"},
-		},
-		{
-			name: `single wildcard`,
-			in:   httpcache.Vary{"*"},
-			want: true,
-		},
-		{
-			name: `multiple wildcards`,
-			in:   httpcache.Vary{"*", "*", "*"},
-			want: true,
-		},
-		{
-			name: `mixed`,
-			in:   httpcache.Vary{"Header-1", "*", "Header-2"},
-			want: true,
-		},
-		{
-			name: `asterisk in header`,
-			in:   httpcache.Vary{"Header-*-Name"},
-			want: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.in.Wildcard()
-			if got != tt.want {
-				t.Errorf("Vary.Wildcard() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestExtensionDirectives_Named(t *testing.T) {
 	es := httpcache.ExtensionDirectives{
 		{Name: "directive-a", Value: OptValue("1")},
@@ -1514,6 +182,51 @@ func TestExtensionDirectives_Named(t *testing.T) {
 
 func OptValue[T any](t T) httpcache.Opt[T] {
 	return httpcache.Opt[T]{Value: t, Valid: true}
+}
+
+func TestRequestData_Clone(t *testing.T) {
+	orig := &httpcache.RequestData{
+		Time:   time.Now(),
+		Method: "GET",
+		URL:    &url.URL{Scheme: "https", Host: "example.com", Path: "/", RawQuery: "a=1&b=2"},
+		Header: http.Header{
+			"Header-1": []string{"Value-1"},
+			"Header-2": []string{"Value-2", "Value-3"},
+		},
+		Body: []byte("request body"),
+		ParsedDirectives: httpcache.RequestDirectives{
+			NoCache: true,
+			NoStore: true,
+			Extensions: httpcache.ExtensionDirectives{
+				{Name: "Extension-1"},
+				{Name: "Extension-2", Value: httpcache.Opt[string]{Value: "Value", Valid: true}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+
+	if diff := cmp.Diff(orig, cloned); diff != "" {
+		t.Errorf("RequestData.Clone() mismatch (-want +got):\n%s", diff)
+	}
+
+	if orig.URL == cloned.URL {
+		t.Errorf("RequestData.Clone() returned same *url.URL")
+	}
+
+	if mapsIdentical(orig.Header, cloned.Header) {
+		t.Errorf("RequestData.Clone() returned same Header map")
+	}
+
+	for k := range orig.Header {
+		if got, want := orig.Header[k], cloned.Header[k]; slicesIdentical(got, want) {
+			t.Errorf("RequestData.Clone() returned same Header %q slice", k)
+		}
+	}
+
+	if slicesIdentical(orig.ParsedDirectives.Extensions, cloned.ParsedDirectives.Extensions) {
+		t.Errorf("RequestData.Clone() returned same ExtensionDirectives slice")
+	}
 }
 
 func TestParseRequestDirectives(t *testing.T) {
@@ -2020,6 +733,245 @@ func TestRequestDirectives_String(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.in.String(); got != tt.want {
 				t.Errorf("RequestDirectives.String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResponseData_Age(t *testing.T) {
+	tests := []struct {
+		name string
+		resp func(time.Time) httpcache.ResponseData
+		want time.Duration
+	}{
+		{
+			name: "no Date header",
+			resp: func(time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{}
+			},
+			want: time.Minute,
+		},
+		{
+			name: "single Date header",
+			resp: func(now time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{now.Add(-5 * time.Minute).UTC().Format(http.TimeFormat)},
+					},
+				}
+			},
+			want: 6 * time.Minute,
+		},
+		{
+			name: "invalid Date header",
+			resp: func(time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{"invalid"},
+					},
+				}
+			},
+			want: time.Minute,
+		},
+		{
+			name: "multiple Date headers",
+			resp: func(now time.Time) httpcache.ResponseData {
+				return httpcache.ResponseData{
+					Header: http.Header{
+						"Date": []string{
+							now.Add(-5 * time.Minute).Format(http.TimeFormat),
+							now.Add(-10 * time.Minute).Format(http.TimeFormat),
+						},
+					},
+				}
+			},
+			want: time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now()
+
+				resp := tt.resp(now)
+				resp.Time = now
+
+				synctest.Sleep(time.Minute)
+
+				if got := resp.Age(); got != tt.want {
+					t.Errorf("ResponseData.Age() = %s, want %s", got, tt.want)
+				}
+			})
+		})
+	}
+}
+
+func TestResponseData_CacheGroups(t *testing.T) {
+	tests := []struct {
+		name    string
+		resp    httpcache.ResponseData
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "no Cache-Groups header",
+			resp: httpcache.ResponseData{},
+		},
+		{
+			name: "single Cache-Groups header",
+			resp: httpcache.ResponseData{Header: http.Header{
+				"Cache-Groups": []string{`"group-a", "group-b", "group-c", "group-b"`},
+			}},
+			want: []string{"group-a", "group-b", "group-c", "group-b"},
+		},
+		{
+			name: "multiple Cache-Groups headers",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Cache-Groups": []string{
+						`"group-a", "group-b", "group-c", "group-b"`,
+						`"group-c"`,
+						`"group-a", "group-d"`,
+					},
+				},
+			},
+			want: []string{"group-a", "group-b", "group-c", "group-b", "group-c", "group-a", "group-d"},
+		},
+		{
+			name: "parameters are ignored",
+			resp: httpcache.ResponseData{Header: http.Header{
+				"Cache-Groups": []string{`"group-a";parameter=value, "group-b"`},
+			}},
+			want: []string{"group-a", "group-b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				got, gotErr := tt.resp.CacheGroups()
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("ResponseData.CacheGroups() = %v, want %v", got, tt.want)
+				}
+
+				if gotErr != nil && !tt.wantErr {
+					t.Errorf("ResponseData.CacheGroups() err = %v, want nil", gotErr)
+				} else if gotErr == nil && tt.wantErr {
+					t.Error("ResponseData.CacheGroups() err = nil, want non-nil")
+				}
+			})
+		})
+	}
+}
+
+func TestResponseData_Clone(t *testing.T) {
+	orig := &httpcache.ResponseData{
+		Time:       time.Now(),
+		Status:     "Some status",
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Header-1": []string{"Value-1"},
+			"Header-2": []string{"Value-2", "Value-3"},
+		},
+		Body: []byte("request body"),
+		Trailer: http.Header{
+			"Trailer-1": []string{"Value-4"},
+			"Trailer-2": []string{"Value-5", "Value-6"},
+		},
+		ParsedDirectives: httpcache.ResponseDirectives{
+			NoCache: true,
+			NoStore: true,
+			Extensions: httpcache.ExtensionDirectives{
+				{Name: "Extension-1"},
+				{Name: "Extension-2", Value: httpcache.Opt[string]{Value: "Value", Valid: true}},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+
+	if diff := cmp.Diff(orig, cloned); diff != "" {
+		t.Errorf("ResponseData.Clone() mismatch (-want +got):\n%s", diff)
+	}
+
+	if mapsIdentical(orig.Header, cloned.Header) {
+		t.Errorf("ResponseData.Clone() returned same Header map")
+	}
+
+	for k := range orig.Header {
+		if got, want := orig.Header[k], cloned.Header[k]; slicesIdentical(got, want) {
+			t.Errorf("ResponseData.Clone() returned same Header %q slice", k)
+		}
+	}
+
+	if mapsIdentical(orig.Trailer, cloned.Trailer) {
+		t.Errorf("ResponseData.Clone() returned same Trailer map")
+	}
+
+	for k := range orig.Trailer {
+		if got, want := orig.Trailer[k], cloned.Trailer[k]; slicesIdentical(got, want) {
+			t.Errorf("ResponseData.Clone() returned same Trailer %q slice", k)
+		}
+	}
+
+	if slicesIdentical(orig.ParsedDirectives.Extensions, cloned.ParsedDirectives.Extensions) {
+		t.Errorf("ResponseData.Clone() returned same ExtensionDirectives slice")
+	}
+}
+
+func TestResponseData_Date(t *testing.T) {
+	awesomeDate := time.Date(2006, time.January, 2, 15, 4, 5, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		resp   httpcache.ResponseData
+		want   time.Time
+		wantOk bool
+	}{
+		{
+			name: "no Date header",
+			resp: httpcache.ResponseData{},
+		},
+		{
+			name: "single Date header",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{awesomeDate.Format(http.TimeFormat)},
+				},
+			},
+			want:   awesomeDate,
+			wantOk: true,
+		},
+		{
+			name: "invalid Date header",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{"invalid"},
+				},
+			},
+		},
+		{
+			name: "multiple Date headers",
+			resp: httpcache.ResponseData{
+				Header: http.Header{
+					"Date": []string{
+						awesomeDate.Format(http.TimeFormat),
+						awesomeDate.Add(time.Hour).Format(http.TimeFormat),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotOk := tt.resp.Date()
+			if got != tt.want {
+				t.Errorf("ResponseData.Date() = %s, want %s", got, tt.want)
+			}
+			if gotOk != tt.wantOk {
+				t.Errorf("ResponseData.Date() ok = %v, want %v", gotOk, tt.wantOk)
 			}
 		})
 	}
