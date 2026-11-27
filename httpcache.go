@@ -95,6 +95,12 @@ type Config struct {
 	// TargetList, if not empty, contains alternative headers that a [Client] will check in favor of Cache-Control, as
 	// specified in RFC 9213.
 	TargetList []string
+
+	// RequestMethodsWithoutBody optionally defines the set of request methods for which the body should be ignored,
+	// when looking up or caching a response.
+	//
+	// If nil, [DefaultRequestMethodsWithoutBody] is used.
+	RequestMethodsWithoutBody []string
 }
 
 // DefaultSupportedRequestMethods is the default list of request methods that allow caching.
@@ -119,6 +125,13 @@ var DefaultHeuristicallyCacheableStatusCodes = []int{
 	http.StatusGone,
 	http.StatusRequestURITooLong,
 	http.StatusNotImplemented,
+}
+
+// DefaultRequestMethodsWithoutBody is the default list of request methods for which the body is ignored when looking
+// up or storing responses.
+var DefaultRequestMethodsWithoutBody = []string{
+	"GET",
+	"HEAD",
 }
 
 // AllowsStoringResponse checks if the given response data can be cached.
@@ -339,6 +352,14 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header, copyOnChange bool) 
 	}
 
 	return headers
+}
+
+func (c Config) shouldReadBodyForMethod(method string) bool {
+	ignored := c.RequestMethodsWithoutBody
+	if ignored == nil {
+		ignored = DefaultRequestMethodsWithoutBody
+	}
+	return !slices.Contains(ignored, method)
 }
 
 // CalculateAge calculates the age for a response as defined in RFC 9111, Section 4.2.3.

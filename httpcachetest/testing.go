@@ -274,8 +274,7 @@ type doSleep struct {
 var _ storeOperation = doSleep{}
 
 func (d doSleep) do(testing.TB, httpcache.Store) {
-	time.Sleep(d.time)
-	synctest.Wait()
+	synctest.Sleep(d.time)
 }
 
 // TestStore tests an implementation of [github.com/nussjustin/httpcache.Store] against the expectation set by the

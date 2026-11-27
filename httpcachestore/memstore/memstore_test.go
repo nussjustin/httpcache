@@ -120,8 +120,7 @@ func TestMemoryStore_Clear(t *testing.T) {
 			t.Fatalf("failed to store expired response: %s", err)
 		}
 
-		time.Sleep(time.Minute)
-		synctest.Wait()
+		synctest.Sleep(time.Minute)
 
 		// Safety checks. Should not be necessary
 		if resp, _, err := s.Get(t.Context(), freshReq); err != nil {
@@ -190,8 +189,7 @@ func TestMemoryStore_Prune(t *testing.T) {
 			t.Fatalf("failed to store expired response: %s", err)
 		}
 
-		time.Sleep(time.Minute)
-		synctest.Wait()
+		synctest.Sleep(time.Minute)
 
 		// Safety checks. Should not be necessary
 		if resp, _, err := s.Get(t.Context(), freshReq); err != nil {

@@ -818,7 +818,9 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "request with body",
 			txs: []transaction{
 				{
-					req:  newReq(withReqBody(strings.NewReader("first request body"))),
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
 					resp: newResp(withRespHeader("Cache-Control", "public, max-age=240")),
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
@@ -826,13 +828,17 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						Stored:    true,
 					},
 					wantStored: 1,
-					wantReq:    newReq(withReqBody(strings.NewReader("first request body"))),
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=240"),
 						withRespHeader("Transaction-Id", "0")),
 				},
 				{
-					req:  newReq(withReqBody(strings.NewReader("second request body"))),
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("second request body"))),
 					resp: newResp(withRespHeader("Cache-Control", "public, max-age=120")),
 					wantCacheStatus: httpcache.Status{
 						Cache:     "my-cache",
@@ -840,36 +846,163 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						Stored:    true,
 					},
 					wantStored: 1,
-					wantReq:    newReq(withReqBody(strings.NewReader("second request body"))),
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("second request body"))),
 					wantResp: newResp(
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Transaction-Id", "1")),
 				},
 				{
-					req: newReq(withReqBody(strings.NewReader("second request body"))),
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("second request body"))),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
 						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
-					wantReq: newReq(),
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
 					wantResp: newResp(
 						withRespHeader("Age", "60"),
 						withRespHeader("Cache-Control", "public, max-age=120"),
 						withRespHeader("Transaction-Id", "1")),
 				},
 				{
-					req: newReq(withReqBody(strings.NewReader("first request body"))),
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
 					wantCacheStatus: httpcache.Status{
 						Cache:  "my-cache",
 						Detail: "hit",
 						Hit:    true,
 						TTL:    time.Minute,
 					},
-					wantReq: newReq(),
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
 					wantResp: newResp(
 						withRespHeader("Age", "180"),
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "request with body on ignored method",
+			config: httpcache.Config{
+				RequestMethodsWithoutBody: []string{"QUERY"},
+			},
+			txs: []transaction{
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=240")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    3 * time.Minute,
+					},
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("first request body"))),
+					wantResp: newResp(
+						withRespHeader("Age", "60"),
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				// Different body, but response should still come from cache
+				{
+					req: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("second request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    2 * time.Minute,
+					},
+					wantReq: newReq(
+						withReqMethod("QUERY"),
+						withReqBody(strings.NewReader("second request body"))),
+					wantResp: newResp(
+						withRespHeader("Age", "120"),
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+			},
+		},
+		{
+			name: "request with body on default ignored method",
+			txs: []transaction{
+				{
+					req: newReq(
+						withReqBody(strings.NewReader("first request body"))),
+					resp: newResp(withRespHeader("Cache-Control", "public, max-age=240")),
+					wantCacheStatus: httpcache.Status{
+						Cache:     "my-cache",
+						Forwarded: httpcache.ForwardedReasonMiss,
+						Stored:    true,
+					},
+					wantStored: 1,
+					wantReq: newReq(
+						withReqBody(strings.NewReader("first request body"))),
+					wantResp: newResp(
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				{
+					req: newReq(
+						withReqBody(strings.NewReader("first request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    3 * time.Minute,
+					},
+					wantReq: newReq(
+						withReqBody(strings.NewReader("first request body"))),
+					wantResp: newResp(
+						withRespHeader("Age", "60"),
+						withRespHeader("Cache-Control", "public, max-age=240"),
+						withRespHeader("Transaction-Id", "0")),
+				},
+				// Different body, but response should still come from cache
+				{
+					req: newReq(
+						withReqBody(strings.NewReader("second request body"))),
+					wantCacheStatus: httpcache.Status{
+						Cache:  "my-cache",
+						Detail: "hit",
+						Hit:    true,
+						TTL:    2 * time.Minute,
+					},
+					wantReq: newReq(
+						withReqBody(strings.NewReader("second request body"))),
+					wantResp: newResp(
+						withRespHeader("Age", "120"),
 						withRespHeader("Cache-Control", "public, max-age=240"),
 						withRespHeader("Transaction-Id", "0")),
 				},
@@ -982,9 +1115,9 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 			name: "error when reading request body",
 			txs: []transaction{
 				{
-					req:         newReq(withReqBody(errReader{})),
+					req:         newReq(withReqMethod("QUERY"), withReqBody(errReader{})),
 					resp:        newResp(),
-					wantReq:     newReq(withReqBody(errReader{})),
+					wantReq:     newReq(withReqMethod("QUERY"), withReqBody(errReader{})),
 					wantResp:    newResp(),
 					wantRespErr: true,
 				},
@@ -1564,6 +1697,10 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 							t.Errorf("Tx %d: Do() Response.Header = %#v, want %#v", i, got, want)
 						}
 
+						if diff := diffReader(t, tx.wantResp.Body, resp.Body); diff != "" {
+							t.Errorf("Tx %d: Do() Response.Body mismatch (-want +got):\n%s", i, diff)
+						}
+
 						if got, want := store.invalidated, tx.wantInvalidated; !slices.Equal(got, want) {
 							t.Errorf("Tx %d: Do() got Store.Invalidate calls = %v, want %v", i, got, want)
 						}
@@ -1573,8 +1710,7 @@ func testClientDo(t *testing.T, withCacheStatus bool) {
 						}
 					}
 
-					time.Sleep(time.Minute)
-					synctest.Wait()
+					synctest.Sleep(time.Minute)
 				}
 			})
 		})
@@ -1877,8 +2013,7 @@ func TestResponseData_Age(t *testing.T) {
 				resp := tt.resp(now)
 				resp.Time = now
 
-				time.Sleep(time.Minute)
-				synctest.Wait()
+				synctest.Sleep(time.Minute)
 
 				if got := resp.Age(); got != tt.want {
 					t.Errorf("ResponseData.Age() = %s, want %s", got, tt.want)

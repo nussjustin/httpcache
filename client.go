@@ -109,7 +109,7 @@ func (c *Client) do(req *http.Request) (resp *http.Response, status Status, err 
 		return resp, status, err
 	}
 
-	reqData, err := requestDataFromRequest(req, reqDirectives)
+	reqData, err := requestDataFromRequest(req, reqDirectives, c.Config.shouldReadBodyForMethod(req.Method))
 	if err != nil {
 		return nil, Status{}, err
 	}
@@ -392,7 +392,7 @@ type RequestData struct {
 	// Certain headers may have been removed, e.g. authorization related headers.
 	Header http.Header
 
-	// Body contains the raw request body bytes or nil if the request did not send a body.
+	// Body contains the raw request body bytes or nil if the request did not send a body or the body was ignored.
 	Body []byte
 
 	// ParsedDirectives contains the parsed Cache-Control directives.
@@ -402,20 +402,27 @@ type RequestData struct {
 	ParsedDirectives RequestDirectives
 }
 
-func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives) (*RequestData, error) {
+func requestDataFromRequest(req *http.Request, reqDirectives RequestDirectives, shouldReadBody bool) (*RequestData, error) {
+	o := &RequestData{
+		Time:             time.Now(),
+		Method:           cmp.Or(req.Method, "GET"),
+		URL:              req.URL,
+		Header:           req.Header,
+		ParsedDirectives: reqDirectives,
+	}
+
+	if !shouldReadBody {
+		return o, nil
+	}
+
 	body, err := readBody(&req.Body, int(req.ContentLength))
 	if err != nil {
 		return nil, err
 	}
 
-	return &RequestData{
-		Time:             time.Now(),
-		Method:           cmp.Or(req.Method, "GET"),
-		URL:              req.URL,
-		Header:           req.Header,
-		Body:             body,
-		ParsedDirectives: reqDirectives,
-	}, nil
+	o.Body = body
+
+	return o, nil
 }
 
 // Clone returns a deep copy of the RequestData.
@@ -552,31 +559,15 @@ func readBody(rc *io.ReadCloser, size int) (body []byte, err error) {
 
 	switch x := r.(type) {
 	case *bytes.Buffer:
+		if x.Len() == 0 {
+			return nil, nil
+		}
+
 		return slices.Clone(x.Bytes()), nil
 	case *bytes.Reader:
-		body = make([]byte, x.Len())
-
-		if _, err = io.ReadFull(x, body); err != nil {
-			panic("unreachable")
-		}
-
-		if _, err := x.Seek(-int64(len(body)), io.SeekCurrent); err != nil {
-			panic("unreachable")
-		}
-
-		return body, nil
+		return readBodyFromBytesOrStringsReader(x), nil
 	case *strings.Reader:
-		body = make([]byte, x.Len())
-
-		if _, err = io.ReadFull(x, body); err != nil {
-			panic("unreachable")
-		}
-
-		if _, err := x.Seek(-int64(len(body)), io.SeekCurrent); err != nil {
-			panic("unreachable")
-		}
-
-		return body, nil
+		return readBodyFromBytesOrStringsReader(x), nil
 	}
 
 	if size > 0 && size < math.MaxInt {
@@ -591,6 +582,33 @@ func readBody(rc *io.ReadCloser, size int) (body []byte, err error) {
 	*rc = io.NopCloser(bytes.NewReader(body))
 
 	return body, nil
+}
+
+type bytesOrStringsReader interface {
+	*bytes.Reader | *strings.Reader
+
+	io.Reader
+	io.Seeker
+
+	Len() int
+}
+
+func readBodyFromBytesOrStringsReader[T bytesOrStringsReader](r T) []byte {
+	if r.Len() == 0 {
+		return nil
+	}
+
+	body := make([]byte, r.Len())
+
+	if _, err := io.ReadFull(r, body); err != nil {
+		panic("unreachable")
+	}
+
+	if _, err := r.Seek(-int64(len(body)), io.SeekCurrent); err != nil {
+		panic("unreachable")
+	}
+
+	return body
 }
 
 func readAllN(r io.Reader, rn int) ([]byte, error) {
