@@ -126,7 +126,7 @@ var DefaultRequestMethodsWithoutBody = []string{
 // AllowsStoringResponse checks if the given response data can be cached.
 //
 // Note that the response data may not contain a body.
-func (c Config) AllowsStoringResponse(req *RequestData, resp *ResponseData) bool {
+func (c *Config) AllowsStoringResponse(req *RequestData, resp *ResponseData) bool {
 	// 3. Storing Responses in Caches
 	//
 	// A cache MUST NOT store a response to a request unless:
@@ -198,13 +198,13 @@ func (c Config) AllowsStoringResponse(req *RequestData, resp *ResponseData) bool
 
 // ParseRequestDirectives parses the Cache-Control directives for a request by joining all Cache-Control headers with a
 // comma and passing the result to [ParseRequestDirectives].
-func (c Config) ParseRequestDirectives(h http.Header) (RequestDirectives, error) {
+func (c *Config) ParseRequestDirectives(h http.Header) (RequestDirectives, error) {
 	return ParseRequestDirectives(strings.Join(h["Cache-Control"], ","))
 }
 
 // ParseResponseDirectives parses the Cache-Control directives for a response, respecting the targeted cache control
 // headers defined in [Config.TargetList], as specified in RFC 9213.
-func (c Config) ParseResponseDirectives(h http.Header) (ResponseDirectives, error) {
+func (c *Config) ParseResponseDirectives(h http.Header) (ResponseDirectives, error) {
 	for _, name := range c.TargetList {
 		s := h[name]
 		if len(s) == 0 {
@@ -237,7 +237,7 @@ func hasValidExpires(h http.Header) bool {
 	return !expires.IsZero()
 }
 
-func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
+func (c *Config) isHeuristicallyCacheableStatusCode(code int) bool {
 	s := c.HeuristicallyCacheableStatusCode
 	if s == nil {
 		s = DefaultHeuristicallyCacheableStatusCodes
@@ -245,7 +245,7 @@ func (c Config) isHeuristicallyCacheableStatusCode(code int) bool {
 	return slices.Contains(s, code)
 }
 
-func (c Config) isSupportedRequestMethod(method string) bool {
+func (c *Config) isSupportedRequestMethod(method string) bool {
 	s := c.SupportedRequestMethods
 	if s == nil {
 		s = DefaultSupportedRequestMethods
@@ -253,7 +253,7 @@ func (c Config) isSupportedRequestMethod(method string) bool {
 	return slices.Contains(s, method)
 }
 
-func (c Config) isUnderstoodResponseCode(code int) bool {
+func (c *Config) isUnderstoodResponseCode(code int) bool {
 	return slices.Contains(c.UnderstoodResponseCodes, code)
 }
 
@@ -264,7 +264,7 @@ func (c Config) isUnderstoodResponseCode(code int) bool {
 // If [Config.IsSafeMethodFunc] is not nil, it will be called instead and the result returned.
 //
 // The method will be normalized to uppercase in any case.
-func (c Config) IsSafeMethod(method string) bool {
+func (c *Config) IsSafeMethod(method string) bool {
 	method = strings.ToUpper(method)
 
 	if c.IsSafeMethodFunc != nil {
@@ -284,7 +284,7 @@ func (c Config) IsSafeMethod(method string) bool {
 // It returns the updated map.
 //
 // If copyOnChange is true, the map will be copied before removing headers and the copy will be returned.
-func (c Config) RemoveUnstorableHeaders(headers http.Header, copyOnChange bool) http.Header {
+func (c *Config) RemoveUnstorableHeaders(headers http.Header, copyOnChange bool) http.Header {
 	var copied bool
 
 	del := func(name string) {
@@ -343,7 +343,7 @@ func (c Config) RemoveUnstorableHeaders(headers http.Header, copyOnChange bool) 
 	return headers
 }
 
-func (c Config) shouldReadBodyForMethod(method string) bool {
+func (c *Config) shouldReadBodyForMethod(method string) bool {
 	ignored := c.RequestMethodsWithoutBody
 	if ignored == nil {
 		ignored = DefaultRequestMethodsWithoutBody
